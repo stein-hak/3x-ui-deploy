@@ -5,7 +5,7 @@ Automated deployment script for 3x-ui VLESS proxy nodes. Deploys a complete prod
 ## Features
 
 - ✅ **Fully automated** - one command deployment
-- ✅ **28 system packages** - Docker, nginx, monitoring tools
+- ✅ **29 system packages** - Docker, nginx, Python requests, monitoring tools
 - ✅ **Tailscale VPN** - ready to connect
 - ✅ **Network optimizations** - BBR, sysctl tuning
 - ✅ **3x-ui container** - latest from Docker Hub
@@ -59,7 +59,7 @@ sudo ./deploy-node.py
 
 ## What Gets Deployed
 
-### Step 1: Install Required Packages (28 packages)
+### Step 1: Install Required Packages (29 packages)
 - Docker, docker-compose-v2
 - nginx, certbot
 - Monitoring: htop, iftop, nload, atop

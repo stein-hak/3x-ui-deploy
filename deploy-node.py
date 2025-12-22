@@ -115,7 +115,7 @@ def step1_install_packages():
 
     # Install in groups to avoid dependency issues
     package_groups = {
-        "Critical": ["docker.io", "docker-compose-v2", "nginx", "certbot", "python3-certbot-nginx", "iptables-persistent"],
+        "Critical": ["docker.io", "docker-compose-v2", "nginx", "certbot", "python3-certbot-nginx", "python3-requests", "iptables-persistent"],
         "Utilities": ["curl", "wget", "ca-certificates", "gnupg", "lsb-release", "jq", "socat"],
         "Editors": ["vim", "nano", "mc"],
         "Monitoring": ["htop", "iftop", "nload", "atop", "iperf3"],
@@ -585,31 +585,40 @@ def step5_configure_grpc(config: dict):
 
     print_step(3, 4, "Creating gRPC inbound with Unix socket")
 
-    # Import x_ui_client
-    try:
-        sys.path.insert(0, '/home/stein/python/3x-ui')
-        from x_ui_client import XUIClient
-    except ImportError as e:
-        print_error(f"Failed to import x_ui_client: {e}")
-        print("  Please ensure x_ui_client is available")
-        return False
-
-    # Create inbound with Unix socket
+    # Create inbound with Unix socket using direct API calls
     socket_path = "/dev/shm/xui-grpc.sock"
     print(f"  Socket: {socket_path},0666")
     print(f"  Service name: api")
 
     try:
-        client = XUIClient(
-            base_url="http://localhost:2053",
-            username=actual_user,
-            password=actual_pass,
-            verify_ssl=False
+        import requests
+
+        # Create session and login
+        session = requests.Session()
+        base_url = "http://localhost:2053"
+
+        # Login to get session cookie
+        login_response = session.post(
+            f"{base_url}/login",
+            data={
+                "username": actual_user,
+                "password": actual_pass
+            },
+            verify=False
         )
 
-        client.login()
-        print("  ✓ Authenticated to 3x-ui API")
+        if login_response.status_code == 200:
+            login_data = login_response.json()
+            if login_data.get("success"):
+                print("  ✓ Authenticated to 3x-ui API")
+            else:
+                print_error("Login failed: Invalid credentials")
+                return False
+        else:
+            print_error(f"Login failed with status {login_response.status_code}")
+            return False
 
+        # Create inbound configuration
         inbound_config = {
             "enable": True,
             "port": 0,  # Port 0 for Unix socket
@@ -640,14 +649,28 @@ def step5_configure_grpc(config: dict):
             })
         }
 
-        success = client.add_inbound(inbound_config)
+        # Add inbound via API
+        add_response = session.post(
+            f"{base_url}/panel/api/inbounds/add",
+            json=inbound_config,
+            verify=False
+        )
 
-        if success:
-            print_success("gRPC inbound created with Unix socket")
+        if add_response.status_code == 200:
+            add_data = add_response.json()
+            if add_data.get("success"):
+                print_success("gRPC inbound created with Unix socket")
+            else:
+                print_error(f"Failed to create inbound: {add_data.get('msg', 'Unknown error')}")
+                return False
         else:
-            print_error("Failed to create inbound")
+            print_error(f"API request failed with status {add_response.status_code}")
             return False
 
+    except ImportError:
+        print_error("Python 'requests' module not available")
+        print("  Install with: pip3 install requests")
+        return False
     except Exception as e:
         print_error(f"Failed to create gRPC inbound: {e}")
         import traceback
@@ -941,7 +964,7 @@ def step8_final_check_and_reboot(non_interactive=False):
     print(f"\n{Colors.BOLD}{Colors.GREEN}Deployment completed successfully!{Colors.ENDC}\n")
 
     print(f"{Colors.BOLD}What was configured:{Colors.ENDC}")
-    print(f"  ✓ System packages (28 packages)")
+    print(f"  ✓ System packages (29 packages)")
     print(f"  ✓ Tailscale VPN")
     print(f"  ✓ Network optimizations (BBR, sysctl)")
     print(f"  ✓ 3x-ui Docker container")
