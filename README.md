@@ -40,7 +40,10 @@ sudo ./deploy-node.py --hostname vpn-node-01
 ## Usage
 
 ```bash
-# With hostname
+# With hostname and non-interactive mode (recommended for piped installation)
+sudo ./deploy-node.py --hostname node-vienna --yes
+
+# With hostname (interactive)
 sudo ./deploy-node.py --hostname node-vienna
 
 # Without hostname (hostname step will be skipped)
@@ -49,6 +52,10 @@ sudo ./deploy-node.py
 # Show help
 ./deploy-node.py --help
 ```
+
+**Flags:**
+- `--hostname NAME` - Set system hostname
+- `-y, --yes` - Non-interactive mode (auto-continue on errors, required for piped installation)
 
 ## What Gets Deployed
 

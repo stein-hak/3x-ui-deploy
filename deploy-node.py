@@ -814,7 +814,7 @@ def step7_configure_hostname(hostname: str = None):
 # STEP 8: Final Check and Reboot
 # ============================================================================
 
-def step8_final_check_and_reboot():
+def step8_final_check_and_reboot(non_interactive=False):
     """Final system check and optional reboot"""
     print_header("STEP 8: Final Check and Reboot")
 
@@ -910,20 +910,29 @@ def step8_final_check_and_reboot():
     print(f"  - Kernel parameters (sysctl)")
     print(f"  - Network optimizations")
 
-    response = input(f"\n{Colors.BOLD}Reboot now? [y/N]: {Colors.ENDC}")
-    if response.lower() in ['y', 'yes']:
-        print(f"\n{Colors.YELLOW}System will reboot in 5 seconds...{Colors.ENDC}")
-        print("Press Ctrl+C to cancel")
+    if not non_interactive:
         try:
-            time.sleep(5)
-            print_success("Rebooting system...")
-            run_command("reboot", check=False)
-            return True
-        except KeyboardInterrupt:
-            print(f"\n{Colors.YELLOW}Reboot cancelled{Colors.ENDC}")
+            response = input(f"\n{Colors.BOLD}Reboot now? [y/N]: {Colors.ENDC}")
+            if response.lower() in ['y', 'yes']:
+                print(f"\n{Colors.YELLOW}System will reboot in 5 seconds...{Colors.ENDC}")
+                print("Press Ctrl+C to cancel")
+                try:
+                    time.sleep(5)
+                    print_success("Rebooting system...")
+                    run_command("reboot", check=False)
+                    return True
+                except KeyboardInterrupt:
+                    print(f"\n{Colors.YELLOW}Reboot cancelled{Colors.ENDC}")
+                    return True
+            else:
+                print(f"\n{Colors.YELLOW}Skipping reboot. Reboot manually when ready: sudo reboot{Colors.ENDC}")
+                return True
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n{Colors.YELLOW}Non-interactive mode detected{Colors.ENDC}")
+            print(f"Skipping reboot. Reboot manually when ready: sudo reboot")
             return True
     else:
-        print(f"\n{Colors.YELLOW}Skipping reboot. Reboot manually when ready: sudo reboot{Colors.ENDC}")
+        print(f"\n{Colors.YELLOW}Skipping reboot (non-interactive mode). Reboot manually when ready: sudo reboot{Colors.ENDC}")
         return True
 
 
@@ -949,6 +958,11 @@ Examples:
         type=str,
         help='System hostname to configure (optional)'
     )
+    parser.add_argument(
+        '-y', '--yes',
+        action='store_true',
+        help='Non-interactive mode: skip all prompts and continue on errors'
+    )
     args = parser.parse_args()
 
     print_header("3x-ui Node Deployment Script")
@@ -965,7 +979,7 @@ Examples:
         ("Configure gRPC Backend", step5_configure_grpc, True, None),    # Needs config
         ("Configure Anti-Abuse Firewall", step6_configure_firewall, False, None),
         ("Configure Hostname", step7_configure_hostname, False, args.hostname),  # Needs hostname
-        ("Final Check and Reboot", step8_final_check_and_reboot, False, None),
+        ("Final Check and Reboot", step8_final_check_and_reboot, False, args.yes),  # Needs non-interactive flag
     ]
 
     total_steps = len(steps)
@@ -996,11 +1010,17 @@ Examples:
             print_error(f"Failed: {name}\n")
             failed_steps.append(name)
 
-            # Ask if user wants to continue
-            response = input(f"{Colors.YELLOW}Continue with next step? [y/N]: {Colors.ENDC}")
-            if response.lower() not in ['y', 'yes']:
-                print_warning("Deployment aborted by user")
-                break
+            # Ask if user wants to continue (skip in non-interactive mode)
+            if not args.yes:
+                try:
+                    response = input(f"{Colors.YELLOW}Continue with next step? [y/N]: {Colors.ENDC}")
+                    if response.lower() not in ['y', 'yes']:
+                        print_warning("Deployment aborted by user")
+                        break
+                except (EOFError, KeyboardInterrupt):
+                    print(f"\n{Colors.YELLOW}Non-interactive mode detected, continuing...{Colors.ENDC}")
+            else:
+                print_warning(f"Step failed but continuing (non-interactive mode)")
 
     # Summary
     print_header("Deployment Summary")
