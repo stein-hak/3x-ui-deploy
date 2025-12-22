@@ -125,7 +125,16 @@ def step1_install_packages():
 
     code, out, err = run_command(cmd, check=False)
     if code != 0:
-        print_error(f"Failed to install packages: {err}")
+        print_error(f"Failed to install packages")
+        print(f"\nError details:\n{err}")
+
+        # Try to identify which packages are causing issues
+        print(f"\n{Colors.YELLOW}Troubleshooting:{Colors.ENDC}")
+        print("  1. Update packages: apt update && apt upgrade -y")
+        print("  2. Check for held packages: dpkg --get-selections | grep hold")
+        print("  3. Try installing critical packages manually:")
+        print("     apt install -y docker.io docker-compose-v2 nginx certbot")
+
         return False
 
     print_success(f"All {len(packages)} packages installed successfully")
@@ -1013,6 +1022,12 @@ Examples:
 
     for i, (name, func, needs_config, param) in enumerate(steps, 1):
         print(f"\n{Colors.BOLD}Starting: {name}{Colors.ENDC}")
+
+        # Skip steps that require config if config is missing
+        if needs_config and not config_data:
+            print_error(f"Skipping {name} - missing configuration from previous step")
+            failed_steps.append(name)
+            continue
 
         # Pass config if step needs it, or hostname if provided
         if needs_config and config_data:
