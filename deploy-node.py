@@ -114,7 +114,10 @@ def step1_install_packages():
     print_success("Package lists updated")
 
     print_step(2, 3, f"Installing {len(packages)} packages")
-    print(f"  Packages: {', '.join(packages[:5])}... (and {len(packages)-5} more)")
+    if len(packages) > 5:
+        print(f"  Packages: {', '.join(packages[:5])}... (and {len(packages)-5} more)")
+    else:
+        print(f"  Packages: {', '.join(packages)}")
 
     # Install packages with -y flag to auto-confirm
     pkg_list = " ".join(packages)
@@ -164,7 +167,10 @@ def step2_install_tailscale():
         if code == 0:
             print(f"  Current version: {version.strip().split()[0]}")
 
-        response = input(f"{Colors.YELLOW}Reinstall Tailscale? [y/N]: {Colors.ENDC}")
+        try:
+            response = input(f"{Colors.YELLOW}Reinstall Tailscale? [y/N]: {Colors.ENDC}")
+        except (EOFError, KeyboardInterrupt):
+            response = "n"  # Skip reinstall in non-interactive mode
         if response.lower() not in ['y', 'yes']:
             print_success("Skipping Tailscale installation")
             return True
@@ -313,22 +319,38 @@ def step4_setup_3xui():
     """Deploy 3x-ui using Docker Compose"""
     print_header("STEP 4: Setting up 3x-ui Docker Container")
 
-    # Configuration prompts
+    # Configuration prompts (with defaults for non-interactive mode)
     print_step(1, 5, "Gathering configuration")
 
-    deploy_dir = input(f"{Colors.CYAN}Deployment directory [{Colors.BOLD}/opt/3x-ui{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    # Deployment directory
+    try:
+        deploy_dir = input(f"{Colors.CYAN}Deployment directory [{Colors.BOLD}/opt/3x-ui{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    except (EOFError, KeyboardInterrupt):
+        deploy_dir = ""
     if not deploy_dir:
         deploy_dir = "/opt/3x-ui"
 
-    admin_user = input(f"{Colors.CYAN}Admin username [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    # Admin username
+    try:
+        admin_user = input(f"{Colors.CYAN}Admin username [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    except (EOFError, KeyboardInterrupt):
+        admin_user = ""
     if not admin_user:
         admin_user = "admin"
 
-    admin_pass = input(f"{Colors.CYAN}Admin password [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    # Admin password
+    try:
+        admin_pass = input(f"{Colors.CYAN}Admin password [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    except (EOFError, KeyboardInterrupt):
+        admin_pass = ""
     if not admin_pass:
         admin_pass = "admin"
 
-    panel_path = input(f"{Colors.CYAN}Panel URL path [{Colors.BOLD}/admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    # Panel path
+    try:
+        panel_path = input(f"{Colors.CYAN}Panel URL path [{Colors.BOLD}/admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    except (EOFError, KeyboardInterrupt):
+        panel_path = ""
     if not panel_path:
         panel_path = "/admin"
 
@@ -340,7 +362,10 @@ def step4_setup_3xui():
     print_step(2, 5, "Creating deployment directory")
     if os.path.exists(deploy_dir):
         print_warning(f"Directory {deploy_dir} already exists")
-        response = input(f"{Colors.YELLOW}Continue anyway? [y/N]: {Colors.ENDC}")
+        try:
+            response = input(f"{Colors.YELLOW}Continue anyway? [y/N]: {Colors.ENDC}")
+        except (EOFError, KeyboardInterrupt):
+            response = "y"  # Auto-continue in non-interactive mode
         if response.lower() not in ['y', 'yes']:
             print_warning("Skipping 3x-ui setup")
             return False
