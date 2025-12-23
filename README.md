@@ -40,13 +40,16 @@ sudo ./deploy-node.py --hostname vpn-node-01
 ## Usage
 
 ```bash
-# With hostname and non-interactive mode (recommended for piped installation)
-sudo ./deploy-node.py --hostname node-vienna --yes
+# With hostname, domain, and non-interactive mode (recommended for piped installation)
+sudo ./deploy-node.py --hostname node-vienna --domain vpn.example.com --yes
 
-# With hostname (interactive)
+# With hostname and domain (interactive)
+sudo ./deploy-node.py --hostname node-vienna --domain vpn.example.com
+
+# With hostname only (nginx step will prompt for domain)
 sudo ./deploy-node.py --hostname node-vienna
 
-# Without hostname (hostname step will be skipped)
+# Without flags (interactive mode)
 sudo ./deploy-node.py
 
 # Show help
@@ -54,7 +57,8 @@ sudo ./deploy-node.py
 ```
 
 **Flags:**
-- `--hostname NAME` - Set system hostname
+- `--hostname NAME` - Set system hostname (optional)
+- `--domain NAME` - Domain name for nginx configuration (optional)
 - `-y, --yes` - Non-interactive mode (auto-continue on errors, required for piped installation)
 
 ## What Gets Deployed
@@ -94,19 +98,28 @@ sudo ./deploy-node.py
   - Random padding for obfuscation
 - No clients initially (add via panel)
 
-### Step 6: Configure Anti-Abuse Firewall
+### Step 6: Configure Nginx Reverse Proxy
+- Creates nginx config in `/etc/nginx/sites-available/`
+- Enables site in `/etc/nginx/sites-enabled/`
+- Supports both gRPC (`/sync`) and XHTTP (`/api`) paths
+- SSL/TLS configuration for Let's Encrypt
+- Security headers and compression
+- Static content serving
+- Health check endpoints
+
+### Step 7: Configure Anti-Abuse Firewall
 - Blocks SMTP (ports 25, 465, 587, 2525) - anti-spam
 - Blocks BitTorrent (6881-6889, 51413) - anti-piracy
 - Blocks DHT/tracker (6969, 1337)
 - Blocks P2P (eDonkey, eMule)
 - Rules persist across reboots
 
-### Step 7: Configure Hostname
+### Step 8: Configure Hostname
 - Updates `/etc/hostname`
 - Updates `/etc/hosts`
 - Applies with `hostnamectl`
 
-### Step 8: Final Check and Reboot
+### Step 9: Final Check and Reboot
 - Verifies Docker container health
 - Checks iptables rules
 - Confirms BBR enabled
@@ -130,13 +143,19 @@ http://localhost:2053/admin
 cat /opt/3x-ui/data/credentials.txt
 ```
 
-### 3. Setup Nginx Reverse Proxy
+### 3. Obtain SSL Certificate (if nginx was configured)
 
-See main documentation for nginx configuration with SSL.
+```bash
+# If you provided a domain during deployment
+sudo certbot --nginx -d your-domain.com
+
+# Reload nginx after obtaining certificate
+sudo systemctl reload nginx
+```
 
 ### 4. Add VLESS Clients
 
-Use the web panel or `xui-client` script to add clients.
+Use the web panel to add clients to the gRPC or XHTTP inbounds.
 
 ## Requirements
 
