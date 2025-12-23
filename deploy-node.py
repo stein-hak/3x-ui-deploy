@@ -505,8 +505,8 @@ services:
 # ============================================================================
 
 def step5_configure_grpc(config: dict):
-    """Wait for container health, read credentials, and create gRPC inbound with Unix socket"""
-    print_header("STEP 5: Configuring gRPC Backend with Unix Socket")
+    """Wait for container health, read credentials, and create gRPC + XHTTP inbounds with Unix sockets"""
+    print_header("STEP 5: Configuring gRPC + XHTTP Backends with Unix Sockets")
 
     if not config or not isinstance(config, dict):
         print_error("No configuration from previous step")
@@ -586,7 +586,7 @@ def step5_configure_grpc(config: dict):
     print_step(3, 4, "Creating gRPC inbound with Unix socket")
 
     # Create inbound with Unix socket using direct API calls
-    socket_path = "/dev/shm/xui-grpc.sock"
+    socket_path = "/dev/shm/sync.sock"
     print(f"  Socket: {socket_path},0666")
     print(f"  Service name: api")
 
@@ -667,12 +667,94 @@ def step5_configure_grpc(config: dict):
             print_error(f"API request failed with status {add_response.status_code}")
             return False
 
+        # Create XHTTP inbound configuration
+        print("\n  Creating XHTTP inbound with Unix socket...")
+        xhttp_socket_path = "/dev/shm/data.sock"
+        xhttp_path = "/api"
+        print(f"  Socket: {xhttp_socket_path},0666")
+        print(f"  Path: {xhttp_path}")
+
+        xhttp_inbound_config = {
+            "enable": True,
+            "port": 0,  # Port 0 for Unix socket
+            "protocol": "vless",
+            "listen": f"{xhttp_socket_path},0666",  # Unix socket with permissions
+            "remark": "VLESS-XHTTP",
+            "settings": json.dumps({
+                "clients": [],  # Empty - add clients later
+                "decryption": "none",
+                "fallbacks": []
+            }),
+            "streamSettings": json.dumps({
+                "network": "xhttp",
+                "security": "none",
+                "externalProxy": [{
+                    "forceTls": "tls",
+                    "dest": "www.speedtest.net",  # Default external proxy
+                    "port": 443,
+                    "remark": ""
+                }],
+                "xhttpSettings": {
+                    "path": xhttp_path,
+                    "host": "",
+                    "headers": {},
+                    "scMaxBufferedPosts": 30,
+                    "scMaxEachPostBytes": "1000000",
+                    "noSSEHeader": False,
+                    "xPaddingBytes": "100-1000",  # Random padding for obfuscation
+                    "mode": "packet-up"  # Optimized for uploads
+                },
+                "sockopt": {
+                    "acceptProxyProtocol": False,
+                    "tcpFastOpen": True,
+                    "tcpMptcp": True,
+                    "tcpNoDelay": True,
+                    "tcpMaxSeg": 1440,
+                    "tcpKeepAliveIdle": 300,
+                    "tcpUserTimeout": 10000,
+                    "tcpcongestion": "bbr",
+                    "tcpWindowClamp": 600,
+                    "mark": 0,
+                    "tproxy": "off",
+                    "domainStrategy": "UseIP",
+                    "dialerProxy": "",
+                    "tcpKeepAliveInterval": 0,
+                    "V6Only": False,
+                    "interface": ""
+                }
+            }),
+            "sniffing": json.dumps({
+                "enabled": True,
+                "destOverride": ["http", "tls", "quic", "fakedns"],
+                "metadataOnly": False,
+                "routeOnly": False
+            })
+        }
+
+        # Add XHTTP inbound via API
+        xhttp_response = session.post(
+            f"{base_url}/panel/api/inbounds/add",
+            json=xhttp_inbound_config,
+            verify=False
+        )
+
+        if xhttp_response.status_code == 200:
+            xhttp_data = xhttp_response.json()
+            if xhttp_data.get("success"):
+                print_success("XHTTP inbound created with Unix socket")
+            else:
+                print_warning(f"Failed to create XHTTP inbound: {xhttp_data.get('msg', 'Unknown error')}")
+                # Don't return False - gRPC is already created
+        else:
+            print_warning(f"XHTTP API request failed with status {xhttp_response.status_code}")
+            # Don't return False - gRPC is already created
+
     except ImportError:
         print_error("Python 'requests' module not available")
         print("  Install with: pip3 install requests")
         return False
     except Exception as e:
-        print_error(f"Failed to create gRPC inbound: {e}")
+        print_error(f"Failed to create inbounds: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -683,16 +765,21 @@ def step5_configure_grpc(config: dict):
     print(f"  Panel URL: http://localhost:2053{config['panel_path']}")
     print(f"  Username: {actual_user}")
     print(f"  Password: {actual_pass}")
-    print(f"\n{Colors.BOLD}gRPC Configuration:{Colors.ENDC}")
-    print(f"  Transport: Unix Socket")
-    print(f"  Socket: {socket_path}")
-    print(f"  Permissions: 0666")
-    print(f"  Service Name: api")
+    print(f"\n{Colors.BOLD}Inbound Configurations:{Colors.ENDC}")
+    print(f"  1. gRPC Backend:")
+    print(f"     - Socket: {socket_path}")
+    print(f"     - Service Name: api")
+    print(f"     - Permissions: 0666")
+    print(f"  2. XHTTP Backend:")
+    print(f"     - Socket: {xhttp_socket_path}")
+    print(f"     - Path: {xhttp_path}")
+    print(f"     - Mode: packet-up")
+    print(f"     - Permissions: 0666")
     print(f"\n{Colors.BOLD}Next Steps:{Colors.ENDC}")
     print(f"  1. Setup nginx reverse proxy for HTTPS access")
     print(f"  2. Configure domain and SSL certificate")
-    print(f"  3. Add clients using xui-client script")
-    print(f"  4. Configure nginx to proxy to Unix socket")
+    print(f"  3. Add clients to inbounds via web panel")
+    print(f"  4. Configure nginx to proxy to Unix sockets")
 
     return True
 
@@ -968,7 +1055,8 @@ def step8_final_check_and_reboot(non_interactive=False):
     print(f"  ✓ Tailscale VPN")
     print(f"  ✓ Network optimizations (BBR, sysctl)")
     print(f"  ✓ 3x-ui Docker container")
-    print(f"  ✓ VLESS gRPC with Unix socket (/dev/shm/xui-grpc.sock)")
+    print(f"  ✓ VLESS gRPC with Unix socket (/dev/shm/sync.sock)")
+    print(f"  ✓ VLESS XHTTP with Unix socket (/dev/shm/data.sock)")
     print(f"  ✓ Anti-abuse firewall (SMTP, BitTorrent, P2P blocked)")
     print(f"  ✓ System hostname")
 

@@ -9,7 +9,7 @@ Automated deployment script for 3x-ui VLESS proxy nodes. Deploys a complete prod
 - ✅ **Tailscale VPN** - ready to connect
 - ✅ **Network optimizations** - BBR, sysctl tuning
 - ✅ **3x-ui container** - latest from Docker Hub
-- ✅ **Unix socket gRPC** - 30-40% performance boost
+- ✅ **Dual transports** - gRPC + XHTTP with Unix sockets
 - ✅ **Anti-abuse firewall** - blocks SMTP, torrents, P2P
 - ✅ **System verification** - health checks before reboot
 
@@ -83,10 +83,15 @@ sudo ./deploy-node.py
 - Data persistence in `/opt/3x-ui/data/`
 - Health checking enabled
 
-### Step 5: Configure gRPC Backend
-- Unix socket transport (`/dev/shm/xui-grpc.sock`)
-- 30-40% performance improvement vs TCP
-- gRPC service name: `api`
+### Step 5: Configure gRPC + XHTTP Backends
+- **gRPC Backend**: Unix socket (`/dev/shm/sync.sock`)
+  - 30-40% performance improvement vs TCP
+  - Service name: `api`
+- **XHTTP Backend**: Unix socket (`/dev/shm/data.sock`)
+  - Path: `/api`
+  - Mode: packet-up (optimized for uploads)
+  - External proxy: www.speedtest.net
+  - Random padding for obfuscation
 - No clients initially (add via panel)
 
 ### Step 6: Configure Anti-Abuse Firewall
