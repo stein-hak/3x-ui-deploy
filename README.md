@@ -99,13 +99,17 @@ sudo ./deploy-node.py
 - No clients initially (add via panel)
 
 ### Step 6: Configure Nginx Reverse Proxy
-- Creates nginx config in `/etc/nginx/sites-available/`
-- Enables site in `/etc/nginx/sites-enabled/`
-- Supports both gRPC (`/sync`) and XHTTP (`/api`) paths
-- SSL/TLS configuration for Let's Encrypt
-- Security headers and compression
-- Static content serving
-- Health check endpoints
+- Creates **two** nginx configs in `/etc/nginx/sites-available/`:
+  - `{domain}-http` - HTTP-only (for obtaining SSL certificate)
+  - `{domain}-full` - Full HTTPS with gRPC + XHTTP backends
+- Initially enables HTTP-only config
+- Provides instructions to switch to full config after SSL
+- Full config supports:
+  - gRPC backend on `/sync` → `/dev/shm/sync.sock`
+  - XHTTP backend on `/api` → `/dev/shm/data.sock`
+  - SSL/TLS with Let's Encrypt
+  - Security headers and compression
+  - Static content and health endpoints
 
 ### Step 7: Configure Anti-Abuse Firewall
 - Blocks SMTP (ports 25, 465, 587, 2525) - anti-spam
@@ -143,15 +147,24 @@ http://localhost:2053/admin
 cat /opt/3x-ui/data/credentials.txt
 ```
 
-### 3. Obtain SSL Certificate (if nginx was configured)
+### 3. Obtain SSL Certificate and Enable Full Config (if nginx was configured)
 
 ```bash
-# If you provided a domain during deployment
+# Step 1: Obtain SSL certificate (nginx is running HTTP-only)
 sudo certbot --nginx -d your-domain.com
 
-# Reload nginx after obtaining certificate
-sudo systemctl reload nginx
+# Step 2: Switch to full HTTPS config with gRPC + XHTTP backends
+sudo rm /etc/nginx/sites-enabled/your_domain_com
+sudo ln -s /etc/nginx/sites-available/your_domain_com-full /etc/nginx/sites-enabled/your_domain_com
+
+# Step 3: Test and reload nginx
+sudo nginx -t && sudo systemctl reload nginx
 ```
+
+**What this does:**
+- HTTP-only config allows certbot to obtain SSL certificate
+- Full config adds HTTPS with both proxy backends (`/sync` and `/api`)
+- Backends won't work until you switch to the full config
 
 ### 4. Add VLESS Clients
 
