@@ -618,135 +618,164 @@ def step5_configure_grpc(config: dict):
             print_error(f"Login failed with status {login_response.status_code}")
             return False
 
-        # Create inbound configuration
-        inbound_config = {
-            "enable": True,
-            "port": 0,  # Port 0 for Unix socket
-            "protocol": "vless",
-            "listen": f"{socket_path},0666",  # Unix socket with permissions
-            "settings": json.dumps({
-                "clients": [],  # Empty - add clients later
-                "decryption": "none",
-                "fallbacks": []
-            }),
-            "streamSettings": json.dumps({
-                "network": "grpc",
-                "security": "none",
-                "grpcSettings": {
-                    "serviceName": "api",
-                    "multiMode": False
-                }
-            }),
-            "sniffing": json.dumps({
-                "enabled": True,
-                "destOverride": ["http", "tls"]
-            }),
-            "remark": "VLESS-gRPC-Local",
-            "allocate": json.dumps({
-                "strategy": "always",
-                "refresh": 5,
-                "concurrency": 3
-            })
-        }
+        # Check if gRPC inbound already exists
+        list_response = session.get(f"{base_url}/panel/api/inbounds/list", verify=False)
+        grpc_exists = False
 
-        # Add inbound via API
-        add_response = session.post(
-            f"{base_url}/panel/api/inbounds/add",
-            json=inbound_config,
-            verify=False
-        )
+        if list_response.status_code == 200:
+            list_data = list_response.json()
+            if list_data.get("success"):
+                inbounds = list_data.get("obj", [])
+                for inbound in inbounds:
+                    if inbound.get("remark") == "VLESS-gRPC-Local":
+                        grpc_exists = True
+                        print("  ✓ gRPC inbound already exists, skipping creation")
+                        break
 
-        if add_response.status_code == 200:
-            add_data = add_response.json()
-            if add_data.get("success"):
-                print_success("gRPC inbound created with Unix socket")
+        # Create inbound configuration only if it doesn't exist
+        if not grpc_exists:
+            inbound_config = {
+                "enable": True,
+                "port": 0,  # Port 0 for Unix socket
+                "protocol": "vless",
+                "listen": f"{socket_path},0666",  # Unix socket with permissions
+                "settings": json.dumps({
+                    "clients": [],  # Empty - add clients later
+                    "decryption": "none",
+                    "fallbacks": []
+                }),
+                "streamSettings": json.dumps({
+                    "network": "grpc",
+                    "security": "none",
+                    "grpcSettings": {
+                        "serviceName": "api",
+                        "multiMode": False
+                    }
+                }),
+                "sniffing": json.dumps({
+                    "enabled": True,
+                    "destOverride": ["http", "tls"]
+                }),
+                "remark": "VLESS-gRPC-Local",
+                "allocate": json.dumps({
+                    "strategy": "always",
+                    "refresh": 5,
+                    "concurrency": 3
+                })
+            }
+
+            # Add inbound via API
+            add_response = session.post(
+                f"{base_url}/panel/api/inbounds/add",
+                json=inbound_config,
+                verify=False
+            )
+
+            if add_response.status_code == 200:
+                add_data = add_response.json()
+                if add_data.get("success"):
+                    print_success("gRPC inbound created with Unix socket")
+                else:
+                    print_error(f"Failed to create inbound: {add_data.get('msg', 'Unknown error')}")
+                    return False
             else:
-                print_error(f"Failed to create inbound: {add_data.get('msg', 'Unknown error')}")
+                print_error(f"API request failed with status {add_response.status_code}")
                 return False
-        else:
-            print_error(f"API request failed with status {add_response.status_code}")
-            return False
 
-        # Create XHTTP inbound configuration
-        print("\n  Creating XHTTP inbound with Unix socket...")
+        # Check if XHTTP inbound already exists
+        print("\n  Checking XHTTP inbound...")
         xhttp_socket_path = "/dev/shm/data.sock"
         xhttp_path = "/api"
-        print(f"  Socket: {xhttp_socket_path},0666")
-        print(f"  Path: {xhttp_path}")
+        xhttp_exists = False
 
-        xhttp_inbound_config = {
-            "enable": True,
-            "port": 0,  # Port 0 for Unix socket
-            "protocol": "vless",
-            "listen": f"{xhttp_socket_path},0666",  # Unix socket with permissions
-            "remark": "VLESS-XHTTP",
-            "settings": json.dumps({
-                "clients": [],  # Empty - add clients later
-                "decryption": "none",
-                "fallbacks": []
-            }),
-            "streamSettings": json.dumps({
-                "network": "xhttp",
-                "security": "none",
-                "externalProxy": [{
-                    "forceTls": "tls",
-                    "dest": "www.speedtest.net",  # Default external proxy
-                    "port": 443,
-                    "remark": ""
-                }],
-                "xhttpSettings": {
-                    "path": xhttp_path,
-                    "host": "",
-                    "headers": {},
-                    "scMaxBufferedPosts": 30,
-                    "scMaxEachPostBytes": "1000000",
-                    "noSSEHeader": False,
-                    "xPaddingBytes": "100-1000",  # Random padding for obfuscation
-                    "mode": "packet-up"  # Optimized for uploads
-                },
-                "sockopt": {
-                    "acceptProxyProtocol": False,
-                    "tcpFastOpen": True,
-                    "tcpMptcp": True,
-                    "tcpNoDelay": True,
-                    "tcpMaxSeg": 1440,
-                    "tcpKeepAliveIdle": 300,
-                    "tcpUserTimeout": 10000,
-                    "tcpcongestion": "bbr",
-                    "tcpWindowClamp": 600,
-                    "mark": 0,
-                    "tproxy": "off",
-                    "domainStrategy": "UseIP",
-                    "dialerProxy": "",
-                    "tcpKeepAliveInterval": 0,
-                    "V6Only": False,
-                    "interface": ""
-                }
-            }),
-            "sniffing": json.dumps({
-                "enabled": True,
-                "destOverride": ["http", "tls", "quic", "fakedns"],
-                "metadataOnly": False,
-                "routeOnly": False
-            })
-        }
+        if list_response.status_code == 200:
+            list_data = list_response.json()
+            if list_data.get("success"):
+                inbounds = list_data.get("obj", [])
+                for inbound in inbounds:
+                    if inbound.get("remark") == "VLESS-XHTTP":
+                        xhttp_exists = True
+                        print("  ✓ XHTTP inbound already exists, skipping creation")
+                        break
 
-        # Add XHTTP inbound via API
-        xhttp_response = session.post(
-            f"{base_url}/panel/api/inbounds/add",
-            json=xhttp_inbound_config,
-            verify=False
-        )
+        # Create XHTTP inbound configuration only if it doesn't exist
+        if not xhttp_exists:
+            print(f"  Socket: {xhttp_socket_path},0666")
+            print(f"  Path: {xhttp_path}")
 
-        if xhttp_response.status_code == 200:
-            xhttp_data = xhttp_response.json()
-            if xhttp_data.get("success"):
-                print_success("XHTTP inbound created with Unix socket")
+            xhttp_inbound_config = {
+                "enable": True,
+                "port": 0,  # Port 0 for Unix socket
+                "protocol": "vless",
+                "listen": f"{xhttp_socket_path},0666",  # Unix socket with permissions
+                "remark": "VLESS-XHTTP",
+                "settings": json.dumps({
+                    "clients": [],  # Empty - add clients later
+                    "decryption": "none",
+                    "fallbacks": []
+                }),
+                "streamSettings": json.dumps({
+                    "network": "xhttp",
+                    "security": "none",
+                    "externalProxy": [{
+                        "forceTls": "tls",
+                        "dest": "www.speedtest.net",  # Default external proxy
+                        "port": 443,
+                        "remark": ""
+                    }],
+                    "xhttpSettings": {
+                        "path": xhttp_path,
+                        "host": "",
+                        "headers": {},
+                        "scMaxBufferedPosts": 30,
+                        "scMaxEachPostBytes": "1000000",
+                        "noSSEHeader": False,
+                        "xPaddingBytes": "100-1000",  # Random padding for obfuscation
+                        "mode": "packet-up"  # Optimized for uploads
+                    },
+                    "sockopt": {
+                        "acceptProxyProtocol": False,
+                        "tcpFastOpen": True,
+                        "tcpMptcp": True,
+                        "tcpNoDelay": True,
+                        "tcpMaxSeg": 1440,
+                        "tcpKeepAliveIdle": 300,
+                        "tcpUserTimeout": 10000,
+                        "tcpcongestion": "bbr",
+                        "tcpWindowClamp": 600,
+                        "mark": 0,
+                        "tproxy": "off",
+                        "domainStrategy": "UseIP",
+                        "dialerProxy": "",
+                        "tcpKeepAliveInterval": 0,
+                        "V6Only": False,
+                        "interface": ""
+                    }
+                }),
+                "sniffing": json.dumps({
+                    "enabled": True,
+                    "destOverride": ["http", "tls", "quic", "fakedns"],
+                    "metadataOnly": False,
+                    "routeOnly": False
+                })
+            }
+
+            # Add XHTTP inbound via API
+            xhttp_response = session.post(
+                f"{base_url}/panel/api/inbounds/add",
+                json=xhttp_inbound_config,
+                verify=False
+            )
+
+            if xhttp_response.status_code == 200:
+                xhttp_data = xhttp_response.json()
+                if xhttp_data.get("success"):
+                    print_success("XHTTP inbound created with Unix socket")
+                else:
+                    print_warning(f"Failed to create XHTTP inbound: {xhttp_data.get('msg', 'Unknown error')}")
+                    # Don't return False - gRPC is already created
             else:
-                print_warning(f"Failed to create XHTTP inbound: {xhttp_data.get('msg', 'Unknown error')}")
-                # Don't return False - gRPC is already created
-        else:
-            print_warning(f"XHTTP API request failed with status {xhttp_response.status_code}")
+                print_warning(f"XHTTP API request failed with status {xhttp_response.status_code}")
             # Don't return False - gRPC is already created
 
     except ImportError:
