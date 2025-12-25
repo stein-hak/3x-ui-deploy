@@ -648,7 +648,7 @@ def step5_configure_grpc(config: dict):
                     "network": "grpc",
                     "security": "none",
                     "grpcSettings": {
-                        "serviceName": "api",
+                        "serviceName": "sync",
                         "multiMode": False
                     }
                 }),
