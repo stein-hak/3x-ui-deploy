@@ -5,9 +5,12 @@ Automated deployment script for 3x-ui VLESS proxy nodes. Deploys a complete prod
 ## Features
 
 - ✅ **Fully automated** - one command deployment
-- ✅ **29 system packages** - Docker, nginx, Python requests, monitoring tools
+- ✅ **36 system packages** - Docker, nginx, WireGuard, monitoring tools
 - ✅ **Tailscale VPN** - ready to connect
-- ✅ **Network optimizations** - BBR, sysctl tuning
+- ✅ **2-hop VPN support** - WireGuard, iptables, conntrack for chaining
+- ✅ **Prometheus metrics** - node-exporter for monitoring (port 9100)
+- ✅ **Log aggregation** - Fluent Bit for Loki/Graylog (journald, Docker, files)
+- ✅ **Network optimizations** - BBR, sysctl tuning, nginx worker tuning
 - ✅ **3x-ui container** - latest from Docker Hub
 - ✅ **Dual transports** - gRPC + XHTTP with Unix sockets
 - ✅ **Anti-abuse firewall** - blocks SMTP, torrents, P2P
@@ -18,13 +21,13 @@ Automated deployment script for 3x-ui VLESS proxy nodes. Deploys a complete prod
 ### One-liner (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/steinhak/3x-ui-deploy/main/deploy-node.py | sudo python3 - --hostname node-vienna
+curl -fsSL https://raw.githubusercontent.com/stein-hak/3x-ui-deploy/main/deploy-node.py | sudo python3 - --hostname node-vienna
 ```
 
 ### Clone and run
 
 ```bash
-git clone https://github.com/steinhak/3x-ui-deploy.git
+git clone https://github.com/stein-hak/3x-ui-deploy.git
 cd 3x-ui-deploy
 sudo ./deploy-node.py --hostname node-vienna
 ```
@@ -32,7 +35,7 @@ sudo ./deploy-node.py --hostname node-vienna
 ### Download and run
 
 ```bash
-wget https://raw.githubusercontent.com/steinhak/3x-ui-deploy/main/deploy-node.py
+wget https://raw.githubusercontent.com/stein-hak/3x-ui-deploy/main/deploy-node.py
 chmod +x deploy-node.py
 sudo ./deploy-node.py --hostname vpn-node-01
 ```
@@ -63,13 +66,16 @@ sudo ./deploy-node.py
 
 ## What Gets Deployed
 
-### Step 1: Install Required Packages (29 packages)
+### Step 1: Install Required Packages (36 packages)
+- **Adds Fluent Bit repository** automatically (official packages.fluentbit.io)
 - Docker, docker-compose-v2
 - nginx, certbot
-- Monitoring: htop, iftop, nload, atop
-- Network: socat, iperf3
+- Monitoring: htop, iftop, nload, atop, speedtest-cli, prometheus-node-exporter, fluent-bit
+- Network: socat, iperf3, wireguard, wireguard-tools, conntrack
 - Utilities: vim, nano, screen, mc, jq
-- Firewall: ufw, iptables-persistent
+- Firewall: ufw, iptables, iptables-persistent
+- **Disables monitoring services** (prometheus-node-exporter, fluent-bit) for configuration review
+- Creates `/root/CONFIGURE_MONITORING_SERVICES.txt` with setup instructions
 
 ### Step 2: Install Tailscale
 - Official Tailscale VPN client
@@ -99,6 +105,13 @@ sudo ./deploy-node.py
 - No clients initially (add via panel)
 
 ### Step 6: Configure Nginx Reverse Proxy
+- **Optimizes nginx.conf** for performance:
+  - worker_connections: 4096 (up from 768)
+  - multi_accept on, use epoll
+  - tcp_nodelay on, tcp_nopush on
+  - keepalive_timeout 65, keepalive_requests 100
+  - Client timeout and buffer optimizations
+  - Automatic backup before changes
 - Creates **two** nginx configs in `/etc/nginx/sites-available/`:
   - `{domain}-http` - HTTP-only (for obtaining SSL certificate)
   - `{domain}-full` - Full HTTPS with gRPC + XHTTP backends
@@ -226,8 +239,8 @@ The script uses `steinhak/3x-ui:latest` from Docker Hub:
 
 ## Support
 
-- **Issues:** https://github.com/steinhak/3x-ui-deploy/issues
-- **Main repo:** https://github.com/steinhak/3x-ui
+- **Issues:** https://github.com/stein-hak/3x-ui-deploy/issues
+- **Main repo:** https://github.com/stein-hak/3x-ui
 - **Upstream:** https://github.com/MHSanaei/3x-ui
 
 ## License

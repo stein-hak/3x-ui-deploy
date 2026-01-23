@@ -103,26 +103,76 @@ def step1_install_packages():
         "python3-certbot-nginx",
         "mc",
         "iperf3",
-        "iptables-persistent"
+        "iptables",
+        "iptables-persistent",
+        "wireguard",
+        "wireguard-tools",
+        "conntrack",
+        "speedtest-cli",
+        "prometheus-node-exporter",
+        "fluent-bit"
     ]
 
-    print_step(1, 4, "Updating package lists")
+    print_step(1, 5, "Updating package lists")
     code, out, err = run_command("apt-get update", check=False)
     if code != 0:
         print_error(f"Failed to update package lists: {err}")
         return False
     print_success("Package lists updated")
 
+    print_step(2, 5, "Adding Fluent Bit repository")
+
+    # Ensure ca-certificates is installed first
+    code, _, _ = run_command("DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg", check=False)
+
+    # Download and install Fluent Bit GPG key
+    print("  Downloading Fluent Bit GPG key...")
+    code, out, err = run_command(
+        "curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor -o /usr/share/keyrings/fluentbit-keyring.gpg",
+        check=False
+    )
+    if code == 0:
+        print("  ✓ GPG key installed")
+    else:
+        print_warning(f"Failed to install Fluent Bit GPG key: {err}")
+
+    # Get Ubuntu codename
+    code, codename, _ = run_command("lsb_release -cs", check=False)
+    if code == 0:
+        codename = codename.strip()
+        print(f"  Detected Ubuntu: {codename}")
+
+        # Add Fluent Bit repository
+        repo_line = f"deb [signed-by=/usr/share/keyrings/fluentbit-keyring.gpg] https://packages.fluentbit.io/ubuntu/{codename} {codename} main"
+        code, _, err = run_command(
+            f'echo "{repo_line}" > /etc/apt/sources.list.d/fluent-bit.list',
+            check=False
+        )
+        if code == 0:
+            print("  ✓ Fluent Bit repository added")
+
+            # Update apt cache again
+            code, _, _ = run_command("apt-get update", check=False)
+            if code == 0:
+                print_success("Fluent Bit repository configured")
+            else:
+                print_warning("Failed to update apt cache after adding repository")
+        else:
+            print_warning(f"Failed to add Fluent Bit repository: {err}")
+    else:
+        print_warning("Could not detect Ubuntu codename, Fluent Bit may not install")
+
     # Install in groups to avoid dependency issues
     package_groups = {
-        "Critical": ["docker.io", "docker-compose-v2", "nginx", "certbot", "python3-certbot-nginx", "python3-requests", "iptables-persistent"],
+        "Critical": ["docker.io", "docker-compose-v2", "nginx", "certbot", "python3-certbot-nginx", "python3-requests", "iptables", "iptables-persistent"],
         "Utilities": ["curl", "wget", "ca-certificates", "gnupg", "lsb-release", "jq", "socat"],
         "Editors": ["vim", "nano", "mc"],
-        "Monitoring": ["htop", "iftop", "nload", "atop", "iperf3"],
+        "Monitoring": ["htop", "iftop", "nload", "atop", "iperf3", "speedtest-cli", "prometheus-node-exporter", "fluent-bit"],
+        "Network": ["wireguard", "wireguard-tools", "conntrack"],
         "Tools": ["screen", "unzip", "zip", "net-tools", "iproute2", "ufw"],
     }
 
-    print_step(2, 4, "Installing packages in groups")
+    print_step(3, 5, "Installing packages in groups")
     total_installed = 0
     total_failed = 0
     failed_packages = []
@@ -149,7 +199,7 @@ def step1_install_packages():
     elif total_failed > 0:
         print_warning(f"Some packages failed but {total_installed} installed successfully")
 
-    print_step(3, 4, "Installing any missing packages individually")
+    print_step(4, 5, "Installing any missing packages individually")
     if failed_packages:
         recovered = 0
         for pkg in failed_packages[:5]:  # Try first 5 failed packages individually
@@ -162,7 +212,7 @@ def step1_install_packages():
 
     print_success(f"Package installation completed ({total_installed} packages)")
 
-    print_step(4, 4, "Verifying critical packages")
+    print_step(5, 5, "Verifying critical packages")
     critical = ["docker", "nginx", "certbot"]
     all_ok = True
 
@@ -176,11 +226,87 @@ def step1_install_packages():
 
     if all_ok:
         print_success("All critical packages verified")
-        return True
     else:
         print_warning("Some critical packages are missing")
-        # Return True anyway to continue deployment
-        return total_installed > 0
+
+    # Stop and disable monitoring services for configuration review
+    print("\n" + Colors.BOLD + "Disabling monitoring services for configuration review..." + Colors.ENDC)
+
+    monitoring_services = ["prometheus-node-exporter", "fluent-bit"]
+
+    for service in monitoring_services:
+        print(f"\n  Configuring {service}:")
+
+        # Stop service
+        code, _, _ = run_command(f"systemctl stop {service}", check=False)
+        if code == 0:
+            print(f"    ✓ Stopped")
+        else:
+            print(f"    ⊙ Not running")
+
+        # Disable service
+        code, _, _ = run_command(f"systemctl disable {service}", check=False)
+        if code == 0:
+            print(f"    ✓ Disabled from auto-start")
+
+        # Mask service
+        code, _, _ = run_command(f"systemctl mask {service}", check=False)
+        if code == 0:
+            print(f"    ✓ Masked (prevents accidental start)")
+
+    # Create configuration reminder file
+    reminder_content = """========================================
+MONITORING SERVICES INSTALLED
+========================================
+
+The following services have been installed but are DISABLED and MASKED:
+
+1. prometheus-node-exporter
+   - Purpose: Export system metrics to Prometheus
+   - Default port: 9100
+   - Config: None needed (works out of box)
+   - To enable: systemctl unmask prometheus-node-exporter && systemctl enable --now prometheus-node-exporter
+
+2. fluent-bit
+   - Purpose: Log aggregation and shipping
+   - Config file: /etc/fluent-bit/fluent-bit.conf
+   - Documentation: https://docs.fluentbit.io/
+   - To enable: systemctl unmask fluent-bit && systemctl enable --now fluent-bit
+
+========================================
+NEXT STEPS
+========================================
+
+1. Configure Fluent Bit (REQUIRED):
+   - Edit /etc/fluent-bit/fluent-bit.conf
+   - Set up inputs (systemd, docker, tail)
+   - Set up outputs (loki, gelf for Graylog)
+
+2. Prometheus Node Exporter:
+   - No config needed
+   - Will expose metrics on http://localhost:9100/metrics
+
+3. Enable services when ready:
+   sudo systemctl unmask prometheus-node-exporter
+   sudo systemctl enable --now prometheus-node-exporter
+
+   sudo systemctl unmask fluent-bit
+   sudo systemctl enable --now fluent-bit
+
+========================================
+"""
+
+    try:
+        with open("/root/CONFIGURE_MONITORING_SERVICES.txt", "w") as f:
+            f.write(reminder_content)
+        print(f"\n  ✓ Configuration reminder: /root/CONFIGURE_MONITORING_SERVICES.txt")
+    except Exception as e:
+        print_warning(f"Could not create reminder file: {e}")
+
+    print_success("Monitoring services disabled for configuration review")
+
+    # Return True anyway to continue deployment
+    return all_ok or total_installed > 0
 
 
 # ============================================================================
@@ -821,6 +947,54 @@ def step6_configure_nginx(domain=None):
     """Configure nginx reverse proxy for both gRPC and XHTTP backends"""
     print_header("STEP 6: Configuring Nginx Reverse Proxy")
 
+    # Optimize nginx.conf first
+    print_step(1, 6, "Optimizing nginx.conf")
+
+    nginx_conf_path = "/etc/nginx/nginx.conf"
+    backup_path = f"{nginx_conf_path}.backup.{int(time.time())}"
+
+    # Backup existing config
+    code, _, err = run_command(f"cp {nginx_conf_path} {backup_path}", check=False)
+    if code == 0:
+        print(f"  ✓ Backup created: {backup_path}")
+    else:
+        print_warning(f"Could not create backup: {err}")
+
+    # Apply optimizations using sed
+    optimizations = [
+        ("worker_connections", "s/worker_connections.*/        worker_connections 4096;/"),
+        ("multi_accept", "/worker_connections/a\\        multi_accept on;"),
+        ("use epoll", "/events {/a\\        use epoll;"),
+        ("tcp_nopush", "/http {/a\\        tcp_nopush on;"),
+        ("tcp_nodelay", "/tcp_nopush/a\\        tcp_nodelay on;"),
+        ("keepalive_timeout", "s/keepalive_timeout.*/        keepalive_timeout 65;/"),
+        ("keepalive_requests", "/keepalive_timeout/a\\        keepalive_requests 100;"),
+        ("client_body_timeout", "/keepalive_requests/a\\        client_body_timeout 12;"),
+        ("client_header_timeout", "/client_body_timeout/a\\        client_header_timeout 12;"),
+        ("send_timeout", "/client_header_timeout/a\\        send_timeout 10;"),
+        ("client_body_buffer_size", "/send_timeout/a\\        client_body_buffer_size 10K;"),
+        ("client_header_buffer_size", "/client_body_buffer_size/a\\        client_header_buffer_size 1k;"),
+        ("client_max_body_size", "/client_header_buffer_size/a\\        client_max_body_size 8m;"),
+        ("large_client_header_buffers", "/client_max_body_size/a\\        large_client_header_buffers 2 1k;"),
+    ]
+
+    optimized_count = 0
+    for name, sed_cmd in optimizations:
+        code, _, _ = run_command(f"sed -i '{sed_cmd}' {nginx_conf_path}", check=False)
+        if code == 0:
+            optimized_count += 1
+
+    print(f"  ✓ Applied {optimized_count} nginx optimizations")
+
+    # Test nginx config
+    code, _, err = run_command("nginx -t", check=False)
+    if code == 0:
+        print_success("Nginx configuration is valid")
+    else:
+        print_warning(f"Nginx config test failed, restoring backup: {err}")
+        run_command(f"cp {backup_path} {nginx_conf_path}", check=False)
+        print_warning("Backup restored, continuing with original config")
+
     # Ask for domain if not provided
     if not domain:
         try:
@@ -829,13 +1003,13 @@ def step6_configure_nginx(domain=None):
             domain = ""
 
     if not domain:
-        print_warning("No domain provided, skipping nginx configuration")
+        print_warning("No domain provided, skipping site configuration")
         print("You can configure nginx manually later")
         return True
 
     print(f"  Domain: {domain}")
 
-    print_step(1, 4, "Creating nginx configurations")
+    print_step(2, 6, "Creating nginx site configurations")
 
     # Generate HTTP-only config (for obtaining SSL certificate)
     nginx_http_config = f'''# Temporary HTTP-only configuration for {domain}
@@ -1067,7 +1241,7 @@ server {{
         print_error(f"Failed to write nginx configs: {e}")
         return False
 
-    print_step(2, 4, "Enabling HTTP-only site")
+    print_step(3, 6, "Enabling HTTP-only site")
 
     # Create symlink to HTTP-only config
     if os.path.exists(sites_enabled_path):
@@ -1080,7 +1254,7 @@ server {{
         print_error(f"Failed to create symlink: {e}")
         return False
 
-    print_step(3, 4, "Testing nginx configuration")
+    print_step(4, 6, "Testing nginx configuration")
 
     # Test nginx config
     code, out, err = run_command("nginx -t", check=False)
@@ -1090,14 +1264,16 @@ server {{
         print_error(f"Nginx configuration has errors:\n{err}")
         return False
 
-    # Reload nginx
-    code, _, _ = run_command("systemctl reload nginx", check=False)
-    if code == 0:
-        print_success("Nginx reloaded")
-    else:
-        print_warning("Failed to reload nginx - you may need to reload manually")
+    print_step(5, 6, "Restarting nginx to apply optimizations")
 
-    print_step(4, 4, "Next steps for SSL")
+    # Restart nginx (not reload) to apply worker_rlimit_nofile
+    code, _, _ = run_command("systemctl restart nginx", check=False)
+    if code == 0:
+        print_success("Nginx restarted")
+    else:
+        print_warning("Failed to restart nginx - you may need to restart manually")
+
+    print_step(6, 6, "Next steps for SSL")
 
     print(f"\n{Colors.BOLD}Step 1: Obtain SSL Certificate{Colors.ENDC}")
     print(f"  sudo certbot --nginx -d {domain}")
@@ -1387,14 +1563,22 @@ def step9_final_check_and_reboot(non_interactive=False):
     print(f"\n{Colors.BOLD}{Colors.GREEN}Deployment completed successfully!{Colors.ENDC}\n")
 
     print(f"{Colors.BOLD}What was configured:{Colors.ENDC}")
-    print(f"  ✓ System packages (29 packages)")
+    print(f"  ✓ System packages (36 packages including WireGuard, Fluent Bit, Prometheus)")
     print(f"  ✓ Tailscale VPN")
+    print(f"  ✓ 2-hop VPN support (WireGuard tools, iptables, conntrack)")
+    print(f"  ✓ Prometheus node exporter (installed, disabled for config review)")
+    print(f"  ✓ Fluent Bit log shipper (installed, disabled for config review)")
     print(f"  ✓ Network optimizations (BBR, sysctl)")
+    print(f"  ✓ Nginx optimizations (4096 worker connections, epoll, tcp_nodelay)")
     print(f"  ✓ 3x-ui Docker container")
     print(f"  ✓ VLESS gRPC with Unix socket (/dev/shm/sync.sock)")
     print(f"  ✓ VLESS XHTTP with Unix socket (/dev/shm/data.sock)")
     print(f"  ✓ Anti-abuse firewall (SMTP, BitTorrent, P2P blocked)")
     print(f"  ✓ System hostname")
+
+    print(f"\n{Colors.YELLOW}IMPORTANT: Monitoring services are DISABLED{Colors.ENDC}")
+    print(f"  Configure before enabling:")
+    print(f"  - See /root/CONFIGURE_MONITORING_SERVICES.txt")
 
     print(f"\n{Colors.BOLD}Next steps:{Colors.ENDC}")
     print(f"  1. Run 'tailscale up' to connect to your Tailscale network")
