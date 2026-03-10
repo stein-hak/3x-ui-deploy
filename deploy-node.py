@@ -1676,6 +1676,12 @@ Examples:
     for i, (name, func, needs_config, param) in enumerate(steps, 1):
         print(f"\n{Colors.BOLD}Starting: {name}{Colors.ENDC}")
 
+        # Skip steps that need config if config is not available
+        if needs_config and not config_data:
+            print_warning(f"Skipping {name} - requires config from previous step")
+            failed_steps.append(name)
+            continue
+
         # Pass config if step needs it, or hostname if provided
         if needs_config and config_data:
             result = func(config_data)
