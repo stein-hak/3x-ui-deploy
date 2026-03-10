@@ -1426,7 +1426,8 @@ listen stats
     stats enable
     stats uri /stats
     stats refresh 30s
-    stats admin if TRUE"""
+    stats admin if TRUE
+"""
 
     try:
         with open(haproxy_config_file, "w") as f:
