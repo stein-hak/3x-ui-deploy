@@ -774,8 +774,8 @@ def step7_disable_nginx_logging():
     if code == 0:
         print("  ⊙ Logging already disabled in nginx.conf")
     else:
-        # Add to http block
-        cmd = f"sed -i '/http {{/a\\{nginx_logging_config}' /etc/nginx/nginx.conf"
+        # Add to http block using proper escaping
+        cmd = "sed -i '/http {/a\\    # Disable access and error logging\\n    access_log off;\\n    error_log /dev/null crit;' /etc/nginx/nginx.conf"
         code, _, err = run_command(cmd, check=False)
         if code == 0:
             print("  ✓ Disabled logging in nginx.conf")
