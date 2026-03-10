@@ -1063,6 +1063,15 @@ def step10_obtain_ssl_cert(domain: str = None):
 
     print(f"  Domain: {domain}")
 
+    # Check if certificates already exist
+    cert_dir = f"/etc/letsencrypt/live/{domain}"
+    if os.path.exists(f"{cert_dir}/fullchain.pem") and os.path.exists(f"{cert_dir}/privkey.pem"):
+        print_success(f"SSL certificates already exist: {cert_dir}")
+        print(f"  ✓ {cert_dir}/fullchain.pem")
+        print(f"  ✓ {cert_dir}/privkey.pem")
+        print("\n  Skipping certificate acquisition")
+        return domain
+
     print_step(1, 3, "Checking DNS propagation")
     print(f"\n{Colors.YELLOW}Before obtaining SSL certificates, ensure DNS is configured:{Colors.ENDC}")
     print(f"  A record for {domain} must point to this server's IP")
