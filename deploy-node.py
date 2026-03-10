@@ -103,116 +103,31 @@ def step1_install_packages():
         "python3-certbot-nginx",
         "mc",
         "iperf3",
-        "iptables",
-        "iptables-persistent",
-        "wireguard",
-        "wireguard-tools",
-        "conntrack",
-        "speedtest-cli",
-        "prometheus-node-exporter",
-        "fluent-bit"
+        "iptables-persistent"
     ]
 
-    print_step(1, 5, "Updating package lists")
-    code, out, err = run_command("apt-get update", check=False)
+    print_step(1, 3, "Updating package lists")
+    code, out, err = run_command("apt update", check=False)
     if code != 0:
         print_error(f"Failed to update package lists: {err}")
         return False
     print_success("Package lists updated")
 
-    print_step(2, 5, "Adding Fluent Bit repository")
+    print_step(2, 3, f"Installing {len(packages)} packages")
+    print(f"  Packages: {', '.join(packages[:5])}... (and {len(packages)-5} more)")
 
-    # Ensure ca-certificates is installed first
-    code, _, _ = run_command("DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg", check=False)
+    # Install packages with -y flag to auto-confirm
+    pkg_list = " ".join(packages)
+    cmd = f"DEBIAN_FRONTEND=noninteractive apt install -y {pkg_list}"
 
-    # Download and install Fluent Bit GPG key
-    print("  Downloading Fluent Bit GPG key...")
-    code, out, err = run_command(
-        "curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor -o /usr/share/keyrings/fluentbit-keyring.gpg",
-        check=False
-    )
-    if code == 0:
-        print("  ✓ GPG key installed")
-    else:
-        print_warning(f"Failed to install Fluent Bit GPG key: {err}")
-
-    # Get Ubuntu codename
-    code, codename, _ = run_command("lsb_release -cs", check=False)
-    if code == 0:
-        codename = codename.strip()
-        print(f"  Detected Ubuntu: {codename}")
-
-        # Add Fluent Bit repository
-        repo_line = f"deb [signed-by=/usr/share/keyrings/fluentbit-keyring.gpg] https://packages.fluentbit.io/ubuntu/{codename} {codename} main"
-        code, _, err = run_command(
-            f'echo "{repo_line}" > /etc/apt/sources.list.d/fluent-bit.list',
-            check=False
-        )
-        if code == 0:
-            print("  ✓ Fluent Bit repository added")
-
-            # Update apt cache again
-            code, _, _ = run_command("apt-get update", check=False)
-            if code == 0:
-                print_success("Fluent Bit repository configured")
-            else:
-                print_warning("Failed to update apt cache after adding repository")
-        else:
-            print_warning(f"Failed to add Fluent Bit repository: {err}")
-    else:
-        print_warning("Could not detect Ubuntu codename, Fluent Bit may not install")
-
-    # Install in groups to avoid dependency issues
-    package_groups = {
-        "Critical": ["docker.io", "docker-compose-v2", "nginx", "certbot", "python3-certbot-nginx", "python3-requests", "iptables", "iptables-persistent"],
-        "Utilities": ["curl", "wget", "ca-certificates", "gnupg", "lsb-release", "jq", "socat"],
-        "Editors": ["vim", "nano", "mc"],
-        "Monitoring": ["htop", "iftop", "nload", "atop", "iperf3", "speedtest-cli", "prometheus-node-exporter", "fluent-bit"],
-        "Network": ["wireguard", "wireguard-tools", "conntrack"],
-        "Tools": ["screen", "unzip", "zip", "net-tools", "iproute2", "ufw"],
-    }
-
-    print_step(3, 5, "Installing packages in groups")
-    total_installed = 0
-    total_failed = 0
-    failed_packages = []
-
-    for group_name, group_packages in package_groups.items():
-        print(f"\n  Installing {group_name} ({len(group_packages)} packages)...")
-        pkg_list = " ".join(group_packages)
-        cmd = f"DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg_list}"
-
-        code, out, err = run_command(cmd, check=False)
-        if code == 0:
-            print(f"    ✓ {group_name}: {', '.join(group_packages)}")
-            total_installed += len(group_packages)
-        else:
-            print_warning(f"    Some packages in {group_name} failed")
-            failed_packages.extend(group_packages)
-            total_failed += len(group_packages)
-
-    print(f"\n  Summary: {total_installed} installed, {total_failed} failed")
-
-    if total_failed > 0 and total_installed == 0:
-        print_error("No packages were installed - critical failure")
+    code, out, err = run_command(cmd, check=False)
+    if code != 0:
+        print_error(f"Failed to install packages: {err}")
         return False
-    elif total_failed > 0:
-        print_warning(f"Some packages failed but {total_installed} installed successfully")
 
-    print_step(4, 5, "Installing any missing packages individually")
-    if failed_packages:
-        recovered = 0
-        for pkg in failed_packages[:5]:  # Try first 5 failed packages individually
-            code, _, _ = run_command(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {pkg}", check=False)
-            if code == 0:
-                print(f"  ✓ Recovered: {pkg}")
-                recovered += 1
-        if recovered > 0:
-            print_success(f"Recovered {recovered} packages")
+    print_success(f"All {len(packages)} packages installed successfully")
 
-    print_success(f"Package installation completed ({total_installed} packages)")
-
-    print_step(5, 5, "Verifying critical packages")
+    print_step(3, 3, "Verifying critical packages")
     critical = ["docker", "nginx", "certbot"]
     all_ok = True
 
@@ -226,87 +141,10 @@ def step1_install_packages():
 
     if all_ok:
         print_success("All critical packages verified")
+        return True
     else:
-        print_warning("Some critical packages are missing")
-
-    # Stop and disable monitoring services for configuration review
-    print("\n" + Colors.BOLD + "Disabling monitoring services for configuration review..." + Colors.ENDC)
-
-    monitoring_services = ["prometheus-node-exporter", "fluent-bit"]
-
-    for service in monitoring_services:
-        print(f"\n  Configuring {service}:")
-
-        # Stop service
-        code, _, _ = run_command(f"systemctl stop {service}", check=False)
-        if code == 0:
-            print(f"    ✓ Stopped")
-        else:
-            print(f"    ⊙ Not running")
-
-        # Disable service
-        code, _, _ = run_command(f"systemctl disable {service}", check=False)
-        if code == 0:
-            print(f"    ✓ Disabled from auto-start")
-
-        # Mask service
-        code, _, _ = run_command(f"systemctl mask {service}", check=False)
-        if code == 0:
-            print(f"    ✓ Masked (prevents accidental start)")
-
-    # Create configuration reminder file
-    reminder_content = """========================================
-MONITORING SERVICES INSTALLED
-========================================
-
-The following services have been installed but are DISABLED and MASKED:
-
-1. prometheus-node-exporter
-   - Purpose: Export system metrics to Prometheus
-   - Default port: 9100
-   - Config: None needed (works out of box)
-   - To enable: systemctl unmask prometheus-node-exporter && systemctl enable --now prometheus-node-exporter
-
-2. fluent-bit
-   - Purpose: Log aggregation and shipping
-   - Config file: /etc/fluent-bit/fluent-bit.conf
-   - Documentation: https://docs.fluentbit.io/
-   - To enable: systemctl unmask fluent-bit && systemctl enable --now fluent-bit
-
-========================================
-NEXT STEPS
-========================================
-
-1. Configure Fluent Bit (REQUIRED):
-   - Edit /etc/fluent-bit/fluent-bit.conf
-   - Set up inputs (systemd, docker, tail)
-   - Set up outputs (loki, gelf for Graylog)
-
-2. Prometheus Node Exporter:
-   - No config needed
-   - Will expose metrics on http://localhost:9100/metrics
-
-3. Enable services when ready:
-   sudo systemctl unmask prometheus-node-exporter
-   sudo systemctl enable --now prometheus-node-exporter
-
-   sudo systemctl unmask fluent-bit
-   sudo systemctl enable --now fluent-bit
-
-========================================
-"""
-
-    try:
-        with open("/root/CONFIGURE_MONITORING_SERVICES.txt", "w") as f:
-            f.write(reminder_content)
-        print(f"\n  ✓ Configuration reminder: /root/CONFIGURE_MONITORING_SERVICES.txt")
-    except Exception as e:
-        print_warning(f"Could not create reminder file: {e}")
-
-    print_success("Monitoring services disabled for configuration review")
-
-    # Return True anyway to continue deployment
-    return all_ok or total_installed > 0
+        print_error("Some critical packages are missing")
+        return False
 
 
 # ============================================================================
@@ -326,10 +164,7 @@ def step2_install_tailscale():
         if code == 0:
             print(f"  Current version: {version.strip().split()[0]}")
 
-        try:
-            response = input(f"{Colors.YELLOW}Reinstall Tailscale? [y/N]: {Colors.ENDC}")
-        except (EOFError, KeyboardInterrupt):
-            response = "n"  # Skip reinstall in non-interactive mode
+        response = input(f"{Colors.YELLOW}Reinstall Tailscale? [y/N]: {Colors.ENDC}")
         if response.lower() not in ['y', 'yes']:
             print_success("Skipping Tailscale installation")
             return True
@@ -385,6 +220,11 @@ def step3_optimize_sysctl():
         "net.core.wmem_max": "16777216",
         "net.ipv4.tcp_rmem": "4096 87380 16777216",
         "net.ipv4.tcp_wmem": "4096 65536 16777216",
+        # Mobile VPN optimization - aggressive TCP keepalive
+        # Detect dead connections from IP switches quickly (WiFi<->Cellular)
+        "net.ipv4.tcp_keepalive_time": "120",      # Check connection after 2 min (default: 7200s)
+        "net.ipv4.tcp_keepalive_intvl": "10",      # Send probes every 10s (default: 75s)
+        "net.ipv4.tcp_keepalive_probes": "3",      # Give up after 3 failed probes (default: 9)
     }
 
     print_step(1, 3, f"Backing up current /etc/sysctl.conf")
@@ -446,6 +286,7 @@ def step3_optimize_sysctl():
         ("net.ipv4.tcp_congestion_control", "bbr"),
         ("net.core.default_qdisc", "fq"),
         ("fs.file-max", "2097152"),
+        ("net.ipv4.tcp_keepalive_time", "120"),
     ]
 
     all_verified = True
@@ -478,38 +319,22 @@ def step4_setup_3xui():
     """Deploy 3x-ui using Docker Compose"""
     print_header("STEP 4: Setting up 3x-ui Docker Container")
 
-    # Configuration prompts (with defaults for non-interactive mode)
+    # Configuration prompts
     print_step(1, 5, "Gathering configuration")
 
-    # Deployment directory
-    try:
-        deploy_dir = input(f"{Colors.CYAN}Deployment directory [{Colors.BOLD}/opt/3x-ui{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
-    except (EOFError, KeyboardInterrupt):
-        deploy_dir = ""
+    deploy_dir = input(f"{Colors.CYAN}Deployment directory [{Colors.BOLD}/opt/3x-ui{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
     if not deploy_dir:
         deploy_dir = "/opt/3x-ui"
 
-    # Admin username
-    try:
-        admin_user = input(f"{Colors.CYAN}Admin username [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
-    except (EOFError, KeyboardInterrupt):
-        admin_user = ""
+    admin_user = input(f"{Colors.CYAN}Admin username [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
     if not admin_user:
         admin_user = "admin"
 
-    # Admin password
-    try:
-        admin_pass = input(f"{Colors.CYAN}Admin password [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
-    except (EOFError, KeyboardInterrupt):
-        admin_pass = ""
+    admin_pass = input(f"{Colors.CYAN}Admin password [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
     if not admin_pass:
         admin_pass = "admin"
 
-    # Panel path
-    try:
-        panel_path = input(f"{Colors.CYAN}Panel URL path [{Colors.BOLD}/admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
-    except (EOFError, KeyboardInterrupt):
-        panel_path = ""
+    panel_path = input(f"{Colors.CYAN}Panel URL path [{Colors.BOLD}/admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
     if not panel_path:
         panel_path = "/admin"
 
@@ -521,10 +346,7 @@ def step4_setup_3xui():
     print_step(2, 5, "Creating deployment directory")
     if os.path.exists(deploy_dir):
         print_warning(f"Directory {deploy_dir} already exists")
-        try:
-            response = input(f"{Colors.YELLOW}Continue anyway? [y/N]: {Colors.ENDC}")
-        except (EOFError, KeyboardInterrupt):
-            response = "y"  # Auto-continue in non-interactive mode
+        response = input(f"{Colors.YELLOW}Continue anyway? [y/N]: {Colors.ENDC}")
         if response.lower() not in ['y', 'yes']:
             print_warning("Skipping 3x-ui setup")
             return False
@@ -548,7 +370,8 @@ services:
 
     ports:
       - "127.0.0.1:2053:2053"     # Admin panel (localhost only)
-      - "127.0.0.1:10000:10000"   # gRPC endpoint for VLESS (localhost only)
+      - "127.0.0.1:10002:10000"   # gRPC endpoint for VLESS (localhost only)
+      - "127.0.0.1:10003:10001"   # WebSocket endpoint for VLESS (localhost only)
 
     environment:
       - X_UI_PORT=2053
@@ -631,8 +454,8 @@ services:
 # ============================================================================
 
 def step5_configure_grpc(config: dict):
-    """Wait for container health, read credentials, and create gRPC + XHTTP inbounds with Unix sockets"""
-    print_header("STEP 5: Configuring gRPC + XHTTP Backends with Unix Sockets")
+    """Wait for container health, read credentials, and create gRPC inbound with Unix socket"""
+    print_header("STEP 5: Configuring gRPC Backend with Unix Socket")
 
     if not config or not isinstance(config, dict):
         print_error("No configuration from previous step")
@@ -711,205 +534,71 @@ def step5_configure_grpc(config: dict):
 
     print_step(3, 4, "Creating gRPC inbound with Unix socket")
 
-    # Create inbound with Unix socket using direct API calls
-    socket_path = "/dev/shm/sync.sock"
+    # Import x_ui_client
+    try:
+        sys.path.insert(0, '/home/stein/python/3x-ui')
+        from x_ui_client import XUIClient
+    except ImportError as e:
+        print_error(f"Failed to import x_ui_client: {e}")
+        print("  Please ensure x_ui_client is available")
+        return False
+
+    # Create inbound with Unix socket
+    socket_path = "/dev/shm/xui-grpc.sock"
     print(f"  Socket: {socket_path},0666")
     print(f"  Service name: api")
 
     try:
-        import requests
-
-        # Create session and login
-        session = requests.Session()
-        base_url = "http://localhost:2053"
-
-        # Login to get session cookie
-        login_response = session.post(
-            f"{base_url}/login",
-            data={
-                "username": actual_user,
-                "password": actual_pass
-            },
-            verify=False
+        client = XUIClient(
+            base_url="http://localhost:2053",
+            username=actual_user,
+            password=actual_pass,
+            verify_ssl=False
         )
 
-        if login_response.status_code == 200:
-            login_data = login_response.json()
-            if login_data.get("success"):
-                print("  ✓ Authenticated to 3x-ui API")
-            else:
-                print_error("Login failed: Invalid credentials")
-                return False
+        client.login()
+        print("  ✓ Authenticated to 3x-ui API")
+
+        inbound_config = {
+            "enable": True,
+            "port": 0,  # Port 0 for Unix socket
+            "protocol": "vless",
+            "listen": f"{socket_path},0666",  # Unix socket with permissions
+            "settings": json.dumps({
+                "clients": [],  # Empty - add clients later
+                "decryption": "none",
+                "fallbacks": []
+            }),
+            "streamSettings": json.dumps({
+                "network": "grpc",
+                "security": "none",
+                "grpcSettings": {
+                    "serviceName": "api",
+                    "multiMode": False
+                }
+            }),
+            "sniffing": json.dumps({
+                "enabled": True,
+                "destOverride": ["http", "tls"]
+            }),
+            "remark": "VLESS-gRPC-Local",
+            "allocate": json.dumps({
+                "strategy": "always",
+                "refresh": 5,
+                "concurrency": 3
+            })
+        }
+
+        success = client.add_inbound(inbound_config)
+
+        if success:
+            print_success("gRPC inbound created with Unix socket")
         else:
-            print_error(f"Login failed with status {login_response.status_code}")
+            print_error("Failed to create inbound")
             return False
 
-        # Check if gRPC inbound already exists
-        list_response = session.get(f"{base_url}/panel/api/inbounds/list", verify=False)
-        grpc_exists = False
-
-        if list_response.status_code == 200:
-            list_data = list_response.json()
-            if list_data.get("success"):
-                inbounds = list_data.get("obj", [])
-                for inbound in inbounds:
-                    if inbound.get("remark") == "VLESS-gRPC-Local":
-                        grpc_exists = True
-                        print("  ✓ gRPC inbound already exists, skipping creation")
-                        break
-
-        # Create inbound configuration only if it doesn't exist
-        if not grpc_exists:
-            inbound_config = {
-                "enable": True,
-                "port": 0,  # Port 0 for Unix socket
-                "protocol": "vless",
-                "listen": f"{socket_path},0666",  # Unix socket with permissions
-                "settings": json.dumps({
-                    "clients": [],  # Empty - add clients later
-                    "decryption": "none",
-                    "fallbacks": []
-                }),
-                "streamSettings": json.dumps({
-                    "network": "grpc",
-                    "security": "none",
-                    "grpcSettings": {
-                        "serviceName": "sync",
-                        "multiMode": False
-                    }
-                }),
-                "sniffing": json.dumps({
-                    "enabled": True,
-                    "destOverride": ["http", "tls"]
-                }),
-                "remark": "VLESS-gRPC-Local",
-                "allocate": json.dumps({
-                    "strategy": "always",
-                    "refresh": 5,
-                    "concurrency": 3
-                })
-            }
-
-            # Add inbound via API
-            add_response = session.post(
-                f"{base_url}/panel/api/inbounds/add",
-                json=inbound_config,
-                verify=False
-            )
-
-            if add_response.status_code == 200:
-                add_data = add_response.json()
-                if add_data.get("success"):
-                    print_success("gRPC inbound created with Unix socket")
-                else:
-                    print_error(f"Failed to create inbound: {add_data.get('msg', 'Unknown error')}")
-                    return False
-            else:
-                print_error(f"API request failed with status {add_response.status_code}")
-                return False
-
-        # Check if XHTTP inbound already exists
-        print("\n  Checking XHTTP inbound...")
-        xhttp_socket_path = "/dev/shm/data.sock"
-        xhttp_path = "/api"
-        xhttp_exists = False
-
-        if list_response.status_code == 200:
-            list_data = list_response.json()
-            if list_data.get("success"):
-                inbounds = list_data.get("obj", [])
-                for inbound in inbounds:
-                    if inbound.get("remark") == "VLESS-XHTTP":
-                        xhttp_exists = True
-                        print("  ✓ XHTTP inbound already exists, skipping creation")
-                        break
-
-        # Create XHTTP inbound configuration only if it doesn't exist
-        if not xhttp_exists:
-            print(f"  Socket: {xhttp_socket_path},0666")
-            print(f"  Path: {xhttp_path}")
-
-            xhttp_inbound_config = {
-                "enable": True,
-                "port": 0,  # Port 0 for Unix socket
-                "protocol": "vless",
-                "listen": f"{xhttp_socket_path},0666",  # Unix socket with permissions
-                "remark": "VLESS-XHTTP",
-                "settings": json.dumps({
-                    "clients": [],  # Empty - add clients later
-                    "decryption": "none",
-                    "fallbacks": []
-                }),
-                "streamSettings": json.dumps({
-                    "network": "xhttp",
-                    "security": "none",
-                    "externalProxy": [{
-                        "forceTls": "tls",
-                        "dest": "www.speedtest.net",  # Default external proxy
-                        "port": 443,
-                        "remark": ""
-                    }],
-                    "xhttpSettings": {
-                        "path": xhttp_path,
-                        "host": "",
-                        "headers": {},
-                        "scMaxBufferedPosts": 30,
-                        "scMaxEachPostBytes": "1000000",
-                        "noSSEHeader": False,
-                        "xPaddingBytes": "100-1000",  # Random padding for obfuscation
-                        "mode": "packet-up"  # Optimized for uploads
-                    },
-                    "sockopt": {
-                        "acceptProxyProtocol": False,
-                        "tcpFastOpen": True,
-                        "tcpMptcp": True,
-                        "tcpNoDelay": True,
-                        "tcpMaxSeg": 1440,
-                        "tcpKeepAliveIdle": 300,
-                        "tcpUserTimeout": 10000,
-                        "tcpcongestion": "bbr",
-                        "tcpWindowClamp": 600,
-                        "mark": 0,
-                        "tproxy": "off",
-                        "domainStrategy": "UseIP",
-                        "dialerProxy": "",
-                        "tcpKeepAliveInterval": 0,
-                        "V6Only": False,
-                        "interface": ""
-                    }
-                }),
-                "sniffing": json.dumps({
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic", "fakedns"],
-                    "metadataOnly": False,
-                    "routeOnly": False
-                })
-            }
-
-            # Add XHTTP inbound via API
-            xhttp_response = session.post(
-                f"{base_url}/panel/api/inbounds/add",
-                json=xhttp_inbound_config,
-                verify=False
-            )
-
-            if xhttp_response.status_code == 200:
-                xhttp_data = xhttp_response.json()
-                if xhttp_data.get("success"):
-                    print_success("XHTTP inbound created with Unix socket")
-                else:
-                    print_warning(f"Failed to create XHTTP inbound: {xhttp_data.get('msg', 'Unknown error')}")
-                    # Don't return False - gRPC is already created
-            else:
-                print_warning(f"XHTTP API request failed with status {xhttp_response.status_code}")
-            # Don't return False - gRPC is already created
-
-    except ImportError:
-        print_error("Python 'requests' module not available")
-        print("  Install with: pip3 install requests")
-        return False
     except Exception as e:
-        print_error(f"Failed to create inbounds: {e}")
+        print_error(f"Failed to create gRPC inbound: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -920,389 +609,30 @@ def step5_configure_grpc(config: dict):
     print(f"  Panel URL: http://localhost:2053{config['panel_path']}")
     print(f"  Username: {actual_user}")
     print(f"  Password: {actual_pass}")
-    print(f"\n{Colors.BOLD}Inbound Configurations:{Colors.ENDC}")
-    print(f"  1. gRPC Backend:")
-    print(f"     - Socket: {socket_path}")
-    print(f"     - Service Name: api")
-    print(f"     - Permissions: 0666")
-    print(f"  2. XHTTP Backend:")
-    print(f"     - Socket: {xhttp_socket_path}")
-    print(f"     - Path: {xhttp_path}")
-    print(f"     - Mode: packet-up")
-    print(f"     - Permissions: 0666")
+    print(f"\n{Colors.BOLD}gRPC Configuration:{Colors.ENDC}")
+    print(f"  Transport: Unix Socket")
+    print(f"  Socket: {socket_path}")
+    print(f"  Permissions: 0666")
+    print(f"  Service Name: api")
+    print(f"\n{Colors.BOLD}Port Mappings:{Colors.ENDC}")
+    print(f"  gRPC: 127.0.0.1:10002 → container:10000")
+    print(f"  WebSocket: 127.0.0.1:10003 → container:10001")
     print(f"\n{Colors.BOLD}Next Steps:{Colors.ENDC}")
-    print(f"  1. Setup nginx reverse proxy for HTTPS access")
-    print(f"  2. Configure domain and SSL certificate")
-    print(f"  3. Add clients to inbounds via web panel")
-    print(f"  4. Configure nginx to proxy to Unix sockets")
+    print(f"  1. Point DNS to this server")
+    print(f"  2. Obtain SSL certificates with certbot")
+    print(f"  3. Deploy nginx/HAProxy with Ansible")
+    print(f"  4. Add clients using xui-client script")
 
     return True
 
 
 # ============================================================================
-# STEP 6: Configure Nginx Reverse Proxy
+# STEP 6: Configure Anti-Abuse Firewall (iptables)
 # ============================================================================
 
-def step6_configure_nginx(domain=None):
-    """Configure nginx reverse proxy for both gRPC and XHTTP backends"""
-    print_header("STEP 6: Configuring Nginx Reverse Proxy")
-
-    # Optimize nginx.conf first
-    print_step(1, 6, "Optimizing nginx.conf")
-
-    nginx_conf_path = "/etc/nginx/nginx.conf"
-    backup_path = f"{nginx_conf_path}.backup.{int(time.time())}"
-
-    # Backup existing config
-    code, _, err = run_command(f"cp {nginx_conf_path} {backup_path}", check=False)
-    if code == 0:
-        print(f"  ✓ Backup created: {backup_path}")
-    else:
-        print_warning(f"Could not create backup: {err}")
-
-    # Apply optimizations using sed
-    optimizations = [
-        ("worker_connections", "s/worker_connections.*/        worker_connections 4096;/"),
-        ("multi_accept", "/worker_connections/a\\        multi_accept on;"),
-        ("use epoll", "/events {/a\\        use epoll;"),
-        ("tcp_nopush", "/http {/a\\        tcp_nopush on;"),
-        ("tcp_nodelay", "/tcp_nopush/a\\        tcp_nodelay on;"),
-        ("keepalive_timeout", "s/keepalive_timeout.*/        keepalive_timeout 65;/"),
-        ("keepalive_requests", "/keepalive_timeout/a\\        keepalive_requests 100;"),
-        ("client_body_timeout", "/keepalive_requests/a\\        client_body_timeout 12;"),
-        ("client_header_timeout", "/client_body_timeout/a\\        client_header_timeout 12;"),
-        ("send_timeout", "/client_header_timeout/a\\        send_timeout 10;"),
-        ("client_body_buffer_size", "/send_timeout/a\\        client_body_buffer_size 10K;"),
-        ("client_header_buffer_size", "/client_body_buffer_size/a\\        client_header_buffer_size 1k;"),
-        ("client_max_body_size", "/client_header_buffer_size/a\\        client_max_body_size 8m;"),
-        ("large_client_header_buffers", "/client_max_body_size/a\\        large_client_header_buffers 2 1k;"),
-    ]
-
-    optimized_count = 0
-    for name, sed_cmd in optimizations:
-        code, _, _ = run_command(f"sed -i '{sed_cmd}' {nginx_conf_path}", check=False)
-        if code == 0:
-            optimized_count += 1
-
-    print(f"  ✓ Applied {optimized_count} nginx optimizations")
-
-    # Test nginx config
-    code, _, err = run_command("nginx -t", check=False)
-    if code == 0:
-        print_success("Nginx configuration is valid")
-    else:
-        print_warning(f"Nginx config test failed, restoring backup: {err}")
-        run_command(f"cp {backup_path} {nginx_conf_path}", check=False)
-        print_warning("Backup restored, continuing with original config")
-
-    # Ask for domain if not provided
-    if not domain:
-        try:
-            domain = input("Enter domain name (leave empty to skip nginx setup): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            domain = ""
-
-    if not domain:
-        print_warning("No domain provided, skipping site configuration")
-        print("You can configure nginx manually later")
-        return True
-
-    print(f"  Domain: {domain}")
-
-    print_step(2, 6, "Creating nginx site configurations")
-
-    # Generate HTTP-only config (for obtaining SSL certificate)
-    nginx_http_config = f'''# Temporary HTTP-only configuration for {domain}
-# Use this to obtain SSL certificate with certbot
-# After getting cert, switch to {domain.replace(".", "_")}-full.conf
-# Generated by 3x-ui deployment script
-
-server {{
-    listen 80;
-    listen [::]:80;
-    server_name {domain};
-
-    root /var/www/site;
-    index index.html;
-
-    # For certbot webroot/nginx mode
-    location /.well-known/acme-challenge/ {{
-        root /var/www/html;
-    }}
-
-    # Serve site temporarily over HTTP
-    location / {{
-        try_files $uri $uri/ =404;
-    }}
-
-    # API endpoints
-    location /status {{
-        default_type application/json;
-        return 200 '{{"status":"ok","version":"1.0.0"}}';
-    }}
-
-    location /health {{
-        default_type application/json;
-        return 200 '{{"healthy":true}}';
-    }}
-}}
-'''
-
-    # Generate full HTTPS config (for after SSL certificate)
-    nginx_full_config = f'''# Full HTTPS configuration for {domain}
-# Supports VLESS+gRPC and VLESS+XHTTP via Unix sockets
-# Generated by 3x-ui deployment script
-
-server {{
-    listen 80;
-    listen [::]:80;
-    server_name {domain};
-
-    location /.well-known/acme-challenge/ {{
-        root /var/www/html;
-    }}
-
-    location / {{
-        return 301 https://$server_name$request_uri;
-    }}
-}}
-
-server {{
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name {domain};
-
-    server_tokens off;
-
-    # ===============================================
-    # SSL/TLS Configuration
-    # ===============================================
-
-    ssl_certificate /etc/letsencrypt/live/{domain}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{domain}/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!eNULL:!MD5:!DES:!RC4:!ADH:!SSLv3:!EXP:!PSK:!DSS;
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 1h;
-    ssl_session_tickets off;
-
-    # ===============================================
-    # Basic Settings
-    # ===============================================
-
-    root /var/www/site;
-    index index.html;
-
-    access_log /var/log/nginx/access.log;
-    error_log /var/log/nginx/error.log;
-
-    # ===============================================
-    # Security Headers
-    # ===============================================
-
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-
-    # ===============================================
-    # Compression Settings
-    # ===============================================
-
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_min_length 1000;
-    gzip_types
-        text/plain
-        text/css
-        text/xml
-        text/javascript
-        application/json
-        application/javascript
-        application/xml+rss
-        application/atom+xml
-        image/svg+xml;
-
-    # ===============================================
-    # gRPC Backend - Unix Socket
-    # Path: /sync
-    # Socket: /dev/shm/sync.sock
-    # ===============================================
-
-    location /sync {{
-        grpc_pass grpc://unix:/dev/shm/sync.sock;
-
-        # Performance settings
-        grpc_buffer_size 16k;
-        grpc_socket_keepalive on;
-        grpc_read_timeout 1h;
-        grpc_send_timeout 1h;
-
-        # Headers
-        grpc_set_header Connection "";
-        grpc_set_header Host $host;
-        grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        grpc_set_header X-Forwarded-Proto $scheme;
-        grpc_set_header X-Forwarded-Port $server_port;
-        grpc_set_header X-Forwarded-Host $host;
-    }}
-
-    # ===============================================
-    # XHTTP Backend - Unix Socket
-    # Path: /api
-    # Socket: /dev/shm/data.sock
-    # ===============================================
-
-    location /api {{
-        grpc_pass grpc://unix:/dev/shm/data.sock;
-
-        # Performance settings
-        grpc_buffer_size 16k;
-        grpc_socket_keepalive on;
-        grpc_read_timeout 1h;
-        grpc_send_timeout 1h;
-
-        # Headers
-        grpc_set_header Connection "";
-        grpc_set_header Host $host;
-        grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        grpc_set_header X-Forwarded-Proto $scheme;
-        grpc_set_header X-Forwarded-Port $server_port;
-        grpc_set_header X-Forwarded-Host $host;
-    }}
-
-    # ===============================================
-    # Static Content
-    # ===============================================
-
-    location / {{
-        try_files $uri $uri/ =404;
-        add_header Cache-Control "public, max-age=3600";
-    }}
-
-    location ~* \\.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {{
-        expires 7d;
-        add_header Cache-Control "public, immutable";
-        access_log off;
-    }}
-
-    # ===============================================
-    # API Endpoints
-    # ===============================================
-
-    location /status {{
-        default_type application/json;
-        return 200 '{{"status":"ok","version":"1.0.0"}}';
-        add_header Access-Control-Allow-Origin *;
-    }}
-
-    location /health {{
-        default_type application/json;
-        return 200 '{{"healthy":true}}';
-    }}
-
-    # ===============================================
-    # Security - Deny Hidden Files
-    # ===============================================
-
-    location ~ /\\.git {{
-        deny all;
-        return 404;
-    }}
-
-    location ~ /\\. {{
-        deny all;
-        access_log off;
-        log_not_found off;
-        return 404;
-    }}
-}}
-'''
-
-    # Write both configs to sites-available
-    config_filename = domain.replace(".", "_")
-    http_config_path = f"/etc/nginx/sites-available/{config_filename}-http"
-    full_config_path = f"/etc/nginx/sites-available/{config_filename}-full"
-    sites_enabled_path = f"/etc/nginx/sites-enabled/{config_filename}"
-
-    try:
-        # Write HTTP-only config
-        with open(http_config_path, 'w') as f:
-            f.write(nginx_http_config)
-        print(f"  ✓ HTTP config: {http_config_path}")
-
-        # Write full HTTPS config
-        with open(full_config_path, 'w') as f:
-            f.write(nginx_full_config)
-        print(f"  ✓ HTTPS config: {full_config_path}")
-    except Exception as e:
-        print_error(f"Failed to write nginx configs: {e}")
-        return False
-
-    print_step(3, 6, "Enabling HTTP-only site")
-
-    # Create symlink to HTTP-only config
-    if os.path.exists(sites_enabled_path):
-        os.remove(sites_enabled_path)
-
-    try:
-        os.symlink(http_config_path, sites_enabled_path)
-        print(f"  ✓ Enabled HTTP-only config")
-    except Exception as e:
-        print_error(f"Failed to create symlink: {e}")
-        return False
-
-    print_step(4, 6, "Testing nginx configuration")
-
-    # Test nginx config
-    code, out, err = run_command("nginx -t", check=False)
-    if code == 0:
-        print_success("Nginx configuration is valid")
-    else:
-        print_error(f"Nginx configuration has errors:\n{err}")
-        return False
-
-    print_step(5, 6, "Restarting nginx to apply optimizations")
-
-    # Restart nginx (not reload) to apply worker_rlimit_nofile
-    code, _, _ = run_command("systemctl restart nginx", check=False)
-    if code == 0:
-        print_success("Nginx restarted")
-    else:
-        print_warning("Failed to restart nginx - you may need to restart manually")
-
-    print_step(6, 6, "Next steps for SSL")
-
-    print(f"\n{Colors.BOLD}Step 1: Obtain SSL Certificate{Colors.ENDC}")
-    print(f"  sudo certbot --nginx -d {domain}")
-    print()
-    print(f"{Colors.BOLD}Step 2: Switch to Full HTTPS Config{Colors.ENDC}")
-    print(f"  # Remove HTTP-only config symlink")
-    print(f"  sudo rm {sites_enabled_path}")
-    print()
-    print(f"  # Enable full HTTPS config")
-    print(f"  sudo ln -s {full_config_path} {sites_enabled_path}")
-    print()
-    print(f"  # Test and reload")
-    print(f"  sudo nginx -t && sudo systemctl reload nginx")
-    print()
-    print(f"{Colors.BOLD}Config Files:{Colors.ENDC}")
-    print(f"  HTTP-only:  {http_config_path}")
-    print(f"  Full HTTPS: {full_config_path}")
-    print()
-
-    return True
-
-
-# ============================================================================
-# STEP 7: Configure Anti-Abuse Firewall (iptables)
-# ============================================================================
-
-def step7_configure_firewall():
+def step6_configure_firewall():
     """Configure iptables to block abuse traffic from Docker containers"""
-    print_header("STEP 7: Configuring Anti-Abuse Firewall")
+    print_header("STEP 6: Configuring Anti-Abuse Firewall")
 
     print("This will block from Docker containers:")
     print("  - SMTP (ports 25, 465, 587, 2525) - anti-spam")
@@ -1417,6 +747,74 @@ def step7_configure_firewall():
 
 
 # ============================================================================
+# STEP 7: Disable Nginx Logging
+# ============================================================================
+
+def step7_disable_nginx_logging():
+    """Disable nginx access and error logging to save disk space"""
+    print_header("STEP 7: Disabling Nginx Logging")
+
+    print_step(1, 2, "Disabling nginx logging in main config")
+
+    # Backup nginx.conf
+    backup_file = f"/etc/nginx/nginx.conf.backup.{int(time.time())}"
+    code, _, _ = run_command(f"cp /etc/nginx/nginx.conf {backup_file}", check=False)
+    if code == 0:
+        print(f"  ✓ Backup created: {backup_file}")
+
+    # Disable logging in nginx.conf
+    nginx_logging_config = """
+    # Disable access and error logging
+    access_log off;
+    error_log /dev/null crit;
+"""
+
+    # Check if logging is already disabled
+    code, out, _ = run_command("grep -q 'access_log off' /etc/nginx/nginx.conf", check=False)
+    if code == 0:
+        print("  ⊙ Logging already disabled in nginx.conf")
+    else:
+        # Add to http block
+        cmd = f"sed -i '/http {{/a\\{nginx_logging_config}' /etc/nginx/nginx.conf"
+        code, _, err = run_command(cmd, check=False)
+        if code == 0:
+            print("  ✓ Disabled logging in nginx.conf")
+        else:
+            print_warning(f"Could not modify nginx.conf: {err}")
+
+    print_step(2, 2, "Cleaning up existing nginx logs")
+
+    log_dirs = [
+        "/var/log/nginx/",
+    ]
+
+    total_freed = 0
+    for log_dir in log_dirs:
+        # Get current size
+        code, size_out, _ = run_command(f"du -sb {log_dir} 2>/dev/null | cut -f1", check=False)
+        if code == 0 and size_out.strip():
+            size_before = int(size_out.strip())
+        else:
+            size_before = 0
+
+        # Clean logs
+        code, _, _ = run_command(f"find {log_dir} -type f -name '*.log*' -delete 2>/dev/null", check=False)
+
+        if size_before > 0:
+            freed_mb = size_before / 1024 / 1024
+            total_freed += freed_mb
+            print(f"  ✓ Cleaned {log_dir}: {freed_mb:.1f} MB")
+
+    if total_freed > 0:
+        print_success(f"Total space freed: {total_freed:.1f} MB")
+    else:
+        print("  ⊙ No logs to clean")
+
+    print_success("Nginx logging disabled")
+    return True
+
+
+# ============================================================================
 # STEP 8: Configure Hostname
 # ============================================================================
 
@@ -1491,12 +889,593 @@ def step8_configure_hostname(hostname: str = None):
 
 
 # ============================================================================
-# STEP 9: Final Check and Reboot
+# STEP 9: Deploy Basic Nginx Config (for SSL cert acquisition)
 # ============================================================================
 
-def step9_final_check_and_reboot(non_interactive=False):
+def step9_deploy_basic_nginx(domain: str = None):
+    """Deploy basic nginx configuration for SSL certificate acquisition"""
+    print_header("STEP 9: Deploying Basic Nginx Configuration")
+
+    if not domain:
+        print_warning("No domain provided, skipping nginx configuration")
+        print("  To configure nginx, run with: --domain your-domain.com")
+        return True
+
+    print(f"  Domain: {domain}")
+
+    print_step(1, 4, "Creating web root directories")
+    dirs = ["/var/www/site", "/var/www/html"]
+    for d in dirs:
+        code, _, err = run_command(f"mkdir -p {d}", check=False)
+        if code == 0:
+            print(f"  ✓ Created {d}")
+        else:
+            print_error(f"Failed to create {d}: {err}")
+            return False
+
+    print_step(2, 4, "Creating default index.html")
+    index_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>{domain}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{ font-family: Arial, sans-serif; text-align: center; padding: 50px; }}
+        h1 {{ color: #333; }}
+    </style>
+</head>
+<body>
+    <h1>Welcome to {domain}</h1>
+    <p>Server is running</p>
+</body>
+</html>"""
+
+    try:
+        with open("/var/www/site/index.html", "w") as f:
+            f.write(index_html)
+        print_success("Created index.html")
+    except Exception as e:
+        print_error(f"Failed to create index.html: {e}")
+        return False
+
+    print_step(3, 4, "Deploying basic nginx configuration")
+
+    config_name = domain.replace(".", "_")
+    nginx_config = f"""# Basic configuration for {domain}
+# Stage 1: HTTP only for SSL certificate acquisition
+
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain};
+
+    server_tokens off;
+
+    root /var/www/site;
+    index index.html;
+    access_log off;
+    error_log /dev/null crit;
+
+    # ACME challenge location for Let's Encrypt
+    location /.well-known/acme-challenge/ {{
+        root /var/www/html;
+        try_files $uri =404;
+    }}
+
+    # Static content
+    location / {{
+        try_files $uri $uri/ =404;
+        add_header Cache-Control "public, max-age=3600";
+    }}
+
+    # API endpoints
+    location /status {{
+        default_type application/json;
+        return 200 '{{"status":"ok","version":"1.0.0"}}';
+    }}
+
+    location /health {{
+        default_type application/json;
+        return 200 '{{"healthy":true}}';
+    }}
+
+    # Security
+    location ~ /\\.git {{
+        deny all;
+        return 404;
+    }}
+
+    location ~ /\\. {{
+        deny all;
+        access_log off;
+        log_not_found off;
+        return 404;
+    }}
+}}"""
+
+    config_file = f"/etc/nginx/sites-available/{config_name}"
+    try:
+        with open(config_file, "w") as f:
+            f.write(nginx_config)
+        print(f"  ✓ Created {config_file}")
+    except Exception as e:
+        print_error(f"Failed to write nginx config: {e}")
+        return False
+
+    # Enable site
+    symlink = f"/etc/nginx/sites-enabled/{config_name}"
+    code, _, err = run_command(f"ln -sf {config_file} {symlink}", check=False)
+    if code == 0:
+        print(f"  ✓ Enabled site: {symlink}")
+    else:
+        print_error(f"Failed to enable site: {err}")
+        return False
+
+    print_step(4, 4, "Testing and reloading nginx")
+    code, out, err = run_command("nginx -t", check=False)
+    if code != 0:
+        print_error(f"Nginx configuration test failed: {err}")
+        print_warning("Config file: " + config_file)
+        return False
+
+    code, _, err = run_command("systemctl reload nginx", check=False)
+    if code != 0:
+        print_error(f"Failed to reload nginx: {err}")
+        return False
+
+    print_success("Nginx configured and reloaded")
+    print(f"\n{Colors.BOLD}Basic nginx configuration deployed:{Colors.ENDC}")
+    print(f"  Domain: {domain}")
+    print(f"  Config: {config_file}")
+    print(f"  Web root: /var/www/site")
+
+    return domain  # Return domain for next step
+
+
+# ============================================================================
+# STEP 10: Obtain SSL Certificates
+# ============================================================================
+
+def step10_obtain_ssl_cert(domain: str = None):
+    """Guide user to obtain SSL certificates with certbot"""
+    print_header("STEP 10: Obtaining SSL Certificates")
+
+    if not domain:
+        print_warning("No domain configured, skipping SSL certificate acquisition")
+        return True
+
+    print(f"  Domain: {domain}")
+
+    print_step(1, 3, "Checking DNS propagation")
+    print(f"\n{Colors.YELLOW}Before obtaining SSL certificates, ensure DNS is configured:{Colors.ENDC}")
+    print(f"  A record for {domain} must point to this server's IP")
+    print()
+
+    # Try to detect current IP
+    code, ip_out, _ = run_command("curl -s ifconfig.me", check=False)
+    if code == 0:
+        server_ip = ip_out.strip()
+        print(f"  This server's IP: {Colors.BOLD}{server_ip}{Colors.ENDC}")
+    else:
+        server_ip = "UNKNOWN"
+        print_warning("  Could not detect server IP")
+
+    # Check DNS resolution
+    code, dns_out, _ = run_command(f"dig +short {domain} @8.8.8.8", check=False)
+    if code == 0 and dns_out.strip():
+        dns_ip = dns_out.strip().split('\n')[0]
+        print(f"  DNS resolves to: {Colors.BOLD}{dns_ip}{Colors.ENDC}")
+
+        if dns_ip == server_ip:
+            print_success("  DNS correctly points to this server")
+        else:
+            print_warning(f"  DNS mismatch! Expected {server_ip}, got {dns_ip}")
+    else:
+        print_warning(f"  Could not resolve {domain}")
+
+    print()
+    response = input(f"{Colors.CYAN}DNS is configured correctly? [y/N]: {Colors.ENDC}")
+    if response.lower() not in ['y', 'yes']:
+        print_warning("Skipping SSL certificate acquisition")
+        print("  Configure DNS and run certbot manually later")
+        return False
+
+    print_step(2, 3, "Requesting SSL certificate with certbot")
+
+    # Ask for email
+    email = input(f"{Colors.CYAN}Email for Let's Encrypt notifications [{Colors.BOLD}admin@{domain}{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    if not email:
+        email = f"admin@{domain}"
+
+    print(f"\n  Requesting certificate for: {domain}")
+    print(f"  Email: {email}")
+    print()
+
+    # Run certbot
+    cmd = f"""certbot certonly --nginx \\
+  -d {domain} \\
+  --non-interactive --agree-tos \\
+  -m {email}"""
+
+    print(f"  Running: {cmd}")
+    print()
+
+    code, out, err = run_command(cmd, check=False)
+
+    if code == 0:
+        print_success("SSL certificate obtained successfully")
+        print(out)
+
+        # Verify certificate files
+        cert_dir = f"/etc/letsencrypt/live/{domain}"
+        cert_files = ["fullchain.pem", "privkey.pem"]
+
+        all_exist = True
+        for cert_file in cert_files:
+            cert_path = f"{cert_dir}/{cert_file}"
+            if os.path.exists(cert_path):
+                print(f"  ✓ {cert_path}")
+            else:
+                print_error(f"  Missing: {cert_path}")
+                all_exist = False
+
+        if all_exist:
+            print_step(3, 3, "SSL certificate ready")
+            return domain  # Return domain for next step
+        else:
+            print_error("Some certificate files are missing")
+            return False
+    else:
+        print_error("Failed to obtain SSL certificate")
+        print("Error:", err)
+        print("\nTroubleshooting:")
+        print("  1. Ensure DNS A record points to this server")
+        print("  2. Check nginx is running: systemctl status nginx")
+        print(f"  3. Test HTTP access: curl http://{domain}")
+        return False
+
+
+# ============================================================================
+# STEP 11: Deploy Full Nginx + HAProxy Configuration
+# ============================================================================
+
+def step11_deploy_full_config(domain: str = None):
+    """Deploy full nginx and HAProxy configuration with SSL"""
+    print_header("STEP 11: Deploying Full Nginx + HAProxy Configuration")
+
+    if not domain:
+        print_warning("No domain configured, skipping full configuration")
+        return True
+
+    # Verify SSL certificates exist
+    cert_dir = f"/etc/letsencrypt/live/{domain}"
+    if not os.path.exists(f"{cert_dir}/fullchain.pem"):
+        print_error(f"SSL certificate not found: {cert_dir}/fullchain.pem")
+        print("  Run Step 10 first to obtain SSL certificates")
+        return False
+
+    print(f"  Domain: {domain}")
+    print(f"  SSL certificates: {cert_dir}")
+
+    print_step(1, 3, "Deploying full nginx configuration")
+
+    config_name = domain.replace(".", "_")
+    nginx_config = f"""# Full HTTP/HTTPS configuration for {domain}
+# Stage 2: With SSL support
+
+# HTTP on public interface (port 80)
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain};
+
+    server_tokens off;
+
+    root /var/www/site;
+    index index.html;
+    access_log off;
+    error_log /dev/null crit;
+
+    # ACME challenge location for Let's Encrypt
+    location /.well-known/acme-challenge/ {{
+        root /var/www/html;
+        try_files $uri =404;
+    }}
+
+    # Static content
+    location / {{
+        try_files $uri $uri/ =404;
+        add_header Cache-Control "public, max-age=3600";
+    }}
+
+    # API endpoints
+    location /status {{
+        default_type application/json;
+        return 200 '{{"status":"ok","version":"1.0.0"}}';
+    }}
+
+    location /health {{
+        default_type application/json;
+        return 200 '{{"healthy":true}}';
+    }}
+}}
+
+# HTTPS on localhost (port 8080) - forwarded from HAProxy
+server {{
+    listen 127.0.0.1:8080 ssl http2;
+    server_name {domain};
+
+    server_tokens off;
+
+    # SSL/TLS Configuration
+    ssl_certificate {cert_dir}/fullchain.pem;
+    ssl_certificate_key {cert_dir}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!eNULL:!MD5:!DES:!RC4:!ADH:!SSLv3:!EXP:!PSK:!DSS;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1h;
+    ssl_session_tickets off;
+
+    root /var/www/site;
+    index index.html;
+    access_log off;
+    error_log /dev/null crit;
+
+    # Security Headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Compression
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_min_length 1000;
+    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss application/atom+xml image/svg+xml;
+
+    # gRPC Backend - /sync -> 127.0.0.1:10002
+    location /sync {{
+        grpc_pass grpc://127.0.0.1:10002;
+        grpc_buffer_size 128k;
+        grpc_socket_keepalive on;
+        grpc_read_timeout 60s;
+        grpc_send_timeout 60s;
+        grpc_connect_timeout 10s;
+        grpc_set_header Connection "";
+        grpc_set_header Host $host;
+        grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        grpc_set_header X-Forwarded-Proto $scheme;
+        grpc_set_header X-Forwarded-Port $server_port;
+        grpc_set_header X-Forwarded-Host $host;
+    }}
+
+    # WebSocket Backend - /ws -> 127.0.0.1:10003
+    location /ws {{
+        proxy_pass http://127.0.0.1:10003;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_connect_timeout 60s;
+        proxy_buffering off;
+    }}
+
+    # Static Content
+    location / {{
+        try_files $uri $uri/ =404;
+        add_header Cache-Control "public, max-age=3600";
+    }}
+
+    location ~* \\.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {{
+        expires 7d;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }}
+
+    # API endpoints
+    location /status {{
+        default_type application/json;
+        return 200 '{{"status":"ok","version":"1.0.0"}}';
+        add_header Access-Control-Allow-Origin *;
+    }}
+
+    location /health {{
+        default_type application/json;
+        return 200 '{{"healthy":true}}';
+    }}
+
+    # Security
+    location ~ /\\.git {{
+        deny all;
+        return 404;
+    }}
+
+    location ~ /\\. {{
+        deny all;
+        access_log off;
+        log_not_found off;
+        return 404;
+    }}
+}}"""
+
+    config_file = f"/etc/nginx/sites-available/{config_name}"
+
+    # Backup existing config
+    if os.path.exists(config_file):
+        backup_file = f"{config_file}.backup.{int(time.time())}"
+        run_command(f"cp {config_file} {backup_file}", check=False)
+        print(f"  ✓ Backup created: {backup_file}")
+
+    try:
+        with open(config_file, "w") as f:
+            f.write(nginx_config)
+        print_success(f"Nginx configuration updated: {config_file}")
+    except Exception as e:
+        print_error(f"Failed to write nginx config: {e}")
+        return False
+
+    # Test nginx
+    code, out, err = run_command("nginx -t", check=False)
+    if code != 0:
+        print_error(f"Nginx configuration test failed: {err}")
+        return False
+
+    code, _, _ = run_command("systemctl reload nginx", check=False)
+    if code != 0:
+        print_error("Failed to reload nginx")
+        return False
+
+    print_success("Nginx reloaded with full configuration")
+
+    print_step(2, 3, "Deploying HAProxy configuration")
+
+    # Check if HAProxy is installed
+    code, _, _ = run_command("which haproxy", check=False)
+    if code != 0:
+        print("Installing HAProxy...")
+        code, _, err = run_command("apt install -y haproxy", check=False)
+        if code != 0:
+            print_error(f"Failed to install HAProxy: {err}")
+            return False
+
+    # Backup HAProxy config
+    haproxy_config_file = "/etc/haproxy/haproxy.cfg"
+    if os.path.exists(haproxy_config_file):
+        backup_file = f"{haproxy_config_file}.backup.{int(time.time())}"
+        run_command(f"cp {haproxy_config_file} {backup_file}", check=False)
+        print(f"  ✓ HAProxy backup: {backup_file}")
+
+    haproxy_config = f"""# HAProxy Configuration for SNI-based routing
+# Domain: {domain}
+
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+
+defaults
+    log     global
+    mode    tcp
+    option  tcplog
+    option  dontlognull
+
+    timeout connect 10s
+    timeout client  1h
+    timeout server  1h
+    timeout client-fin 30s
+    timeout server-fin 30s
+
+frontend tls_frontend
+    bind *:443
+    mode tcp
+
+    tcp-request inspect-delay 5s
+    tcp-request content accept if {{ req_ssl_hello_type 1 }}
+
+    # Route {domain} to nginx backend (port 8080)
+    use_backend nginx_backend if {{ req_ssl_sni -i {domain} }}
+
+    # All other SNI goes to Reality backend (port 8443)
+    default_backend xray_reality
+
+backend nginx_backend
+    mode tcp
+    option tcp-check
+    server nginx1 127.0.0.1:8080 check inter 5s rise 2 fall 3
+
+backend xray_reality
+    mode tcp
+    option tcp-check
+    server xray1 127.0.0.1:8443 check inter 5s rise 2 fall 3
+
+listen stats
+    bind 127.0.0.1:8404
+    mode http
+    stats enable
+    stats uri /stats
+    stats refresh 30s
+    stats admin if TRUE"""
+
+    try:
+        with open(haproxy_config_file, "w") as f:
+            f.write(haproxy_config)
+        print_success(f"HAProxy configuration written: {haproxy_config_file}")
+    except Exception as e:
+        print_error(f"Failed to write HAProxy config: {e}")
+        return False
+
+    # Test HAProxy config
+    code, out, err = run_command("haproxy -c -f /etc/haproxy/haproxy.cfg", check=False)
+    if code != 0:
+        print_error(f"HAProxy configuration test failed: {err}")
+        return False
+
+    # Restart HAProxy
+    code, _, err = run_command("systemctl restart haproxy", check=False)
+    if code != 0:
+        print_error(f"Failed to restart HAProxy: {err}")
+        return False
+
+    code, _, _ = run_command("systemctl enable haproxy", check=False)
+
+    print_success("HAProxy configured and started")
+
+    print_step(3, 3, "Verifying services")
+
+    time.sleep(2)  # Wait for services to start
+
+    # Check nginx port 8080
+    code, _, _ = run_command("ss -tlnp | grep ':8080'", check=False)
+    if code == 0:
+        print("  ✓ Nginx listening on 127.0.0.1:8080")
+    else:
+        print_warning("  Nginx not listening on port 8080")
+
+    # Check HAProxy port 443
+    code, _, _ = run_command("ss -tlnp | grep ':443'", check=False)
+    if code == 0:
+        print("  ✓ HAProxy listening on *:443")
+    else:
+        print_warning("  HAProxy not listening on port 443")
+
+    print_success("Full configuration deployed successfully")
+
+    print(f"\n{Colors.BOLD}Configuration Summary:{Colors.ENDC}")
+    print(f"  Domain: {domain}")
+    print(f"  Nginx HTTP: port 80 (static + ACME)")
+    print(f"  Nginx HTTPS: port 8080 (backends)")
+    print(f"  HAProxy: port 443 (SNI routing)")
+    print(f"\n{Colors.BOLD}Traffic Flow:{Colors.ENDC}")
+    print(f"  Client → HAProxy:443 → Nginx:8080 → Backends")
+    print(f"    /sync → gRPC:10002")
+    print(f"    /ws   → WebSocket:10003")
+
+    return True
+
+
+# ============================================================================
+# STEP 12: Final Check and Reboot
+# ============================================================================
+
+def step12_final_check_and_reboot():
     """Final system check and optional reboot"""
-    print_header("STEP 9: Final Check and Reboot")
+    print_header("STEP 12: Final Check and Reboot")
 
     print_step(1, 3, "Running system checks")
 
@@ -1563,34 +1542,41 @@ def step9_final_check_and_reboot(non_interactive=False):
     print(f"\n{Colors.BOLD}{Colors.GREEN}Deployment completed successfully!{Colors.ENDC}\n")
 
     print(f"{Colors.BOLD}What was configured:{Colors.ENDC}")
-    print(f"  ✓ System packages (36 packages including WireGuard, Fluent Bit, Prometheus)")
+    print(f"  ✓ System packages (28 packages)")
     print(f"  ✓ Tailscale VPN")
-    print(f"  ✓ 2-hop VPN support (WireGuard tools, iptables, conntrack)")
-    print(f"  ✓ Prometheus node exporter (installed, disabled for config review)")
-    print(f"  ✓ Fluent Bit log shipper (installed, disabled for config review)")
     print(f"  ✓ Network optimizations (BBR, sysctl)")
-    print(f"  ✓ Nginx optimizations (4096 worker connections, epoll, tcp_nodelay)")
     print(f"  ✓ 3x-ui Docker container")
-    print(f"  ✓ VLESS gRPC with Unix socket (/dev/shm/sync.sock)")
-    print(f"  ✓ VLESS XHTTP with Unix socket (/dev/shm/data.sock)")
+    print(f"  ✓ VLESS gRPC with Unix socket (/dev/shm/xui-grpc.sock)")
+    print(f"  ✓ VLESS gRPC endpoint (port 10002 → container 10000)")
+    print(f"  ✓ VLESS WebSocket endpoint (port 10003 → container 10001)")
     print(f"  ✓ Anti-abuse firewall (SMTP, BitTorrent, P2P blocked)")
     print(f"  ✓ System hostname")
 
-    print(f"\n{Colors.YELLOW}IMPORTANT: Monitoring services are DISABLED{Colors.ENDC}")
-    print(f"  Configure before enabling:")
-    print(f"  - See /root/CONFIGURE_MONITORING_SERVICES.txt")
+    # Check if domain was configured
+    code, _, _ = run_command("ss -tlnp | grep ':443'", check=False)
+    if code == 0:
+        print(f"  ✓ Nginx configuration (HTTP + HTTPS)")
+        print(f"  ✓ HAProxy SNI routing (port 443)")
+        print(f"  ✓ SSL certificates (Let's Encrypt)")
 
     print(f"\n{Colors.BOLD}Next steps:{Colors.ENDC}")
-    print(f"  1. Run 'tailscale up' to connect to your Tailscale network")
-    print(f"  2. Setup nginx reverse proxy with SSL")
-    print(f"  3. Add VLESS clients via panel or xui-client script")
-    print(f"  4. Configure domain and SSL certificate")
+    # Check if HAProxy is running to determine next steps
+    code, _, _ = run_command("ss -tlnp | grep ':443'", check=False)
+    if code == 0:
+        print(f"  1. Add VLESS clients via panel or xui-client script")
+        print(f"  2. Test connectivity from VPN clients")
+        print(f"  3. Monitor logs and performance")
+    else:
+        print(f"  1. Point DNS A records to this server's IP")
+        print(f"  2. Run with --domain flag to configure nginx/HAProxy")
+        print(f"  3. Add VLESS clients via panel or xui-client script")
 
     print(f"\n{Colors.BOLD}Important locations:{Colors.ENDC}")
     print(f"  Admin panel: http://localhost:2053/admin")
     print(f"  Docker files: /opt/3x-ui/")
     print(f"  Data volume: /opt/3x-ui/data/")
-    print(f"  Unix socket: /dev/shm/xui-grpc.sock")
+    print(f"  gRPC endpoint: 127.0.0.1:10002")
+    print(f"  WebSocket endpoint: 127.0.0.1:10003")
 
     print_step(3, 3, "Reboot system")
 
@@ -1599,29 +1585,20 @@ def step9_final_check_and_reboot(non_interactive=False):
     print(f"  - Kernel parameters (sysctl)")
     print(f"  - Network optimizations")
 
-    if not non_interactive:
+    response = input(f"\n{Colors.BOLD}Reboot now? [y/N]: {Colors.ENDC}")
+    if response.lower() in ['y', 'yes']:
+        print(f"\n{Colors.YELLOW}System will reboot in 5 seconds...{Colors.ENDC}")
+        print("Press Ctrl+C to cancel")
         try:
-            response = input(f"\n{Colors.BOLD}Reboot now? [y/N]: {Colors.ENDC}")
-            if response.lower() in ['y', 'yes']:
-                print(f"\n{Colors.YELLOW}System will reboot in 5 seconds...{Colors.ENDC}")
-                print("Press Ctrl+C to cancel")
-                try:
-                    time.sleep(5)
-                    print_success("Rebooting system...")
-                    run_command("reboot", check=False)
-                    return True
-                except KeyboardInterrupt:
-                    print(f"\n{Colors.YELLOW}Reboot cancelled{Colors.ENDC}")
-                    return True
-            else:
-                print(f"\n{Colors.YELLOW}Skipping reboot. Reboot manually when ready: sudo reboot{Colors.ENDC}")
-                return True
-        except (EOFError, KeyboardInterrupt):
-            print(f"\n{Colors.YELLOW}Non-interactive mode detected{Colors.ENDC}")
-            print(f"Skipping reboot. Reboot manually when ready: sudo reboot")
+            time.sleep(5)
+            print_success("Rebooting system...")
+            run_command("reboot", check=False)
+            return True
+        except KeyboardInterrupt:
+            print(f"\n{Colors.YELLOW}Reboot cancelled{Colors.ENDC}")
             return True
     else:
-        print(f"\n{Colors.YELLOW}Skipping reboot (non-interactive mode). Reboot manually when ready: sudo reboot{Colors.ENDC}")
+        print(f"\n{Colors.YELLOW}Skipping reboot. Reboot manually when ready: sudo reboot{Colors.ENDC}")
         return True
 
 
@@ -1639,7 +1616,8 @@ def main():
 Examples:
   sudo ./deploy-node.py
   sudo ./deploy-node.py --hostname node-vienna
-  sudo ./deploy-node.py --hostname vpn-server-01
+  sudo ./deploy-node.py --hostname vpn-server-01 --domain maptrail.shop
+  sudo ./deploy-node.py --domain lionhex.xyz
         """
     )
     parser.add_argument(
@@ -1650,12 +1628,7 @@ Examples:
     parser.add_argument(
         '--domain',
         type=str,
-        help='Domain name for nginx configuration (optional)'
-    )
-    parser.add_argument(
-        '-y', '--yes',
-        action='store_true',
-        help='Non-interactive mode: skip all prompts and continue on errors'
+        help='Domain name for nginx/HAProxy configuration (optional)'
     )
     args = parser.parse_args()
 
@@ -1669,12 +1642,15 @@ Examples:
         ("Install Required Packages", step1_install_packages, False, None),
         ("Install Tailscale", step2_install_tailscale, False, None),
         ("Optimize sysctl Values", step3_optimize_sysctl, False, None),
-        ("Setup 3x-ui Docker Container", step4_setup_3xui, False, None),  # Creates and returns config
-        ("Configure gRPC + XHTTP Backends", step5_configure_grpc, True, None),    # Needs config from step4
-        ("Configure Nginx Reverse Proxy", step6_configure_nginx, False, args.domain),  # Needs domain
-        ("Configure Anti-Abuse Firewall", step7_configure_firewall, False, None),
+        ("Setup 3x-ui Docker Container", step4_setup_3xui, True, None),  # Returns config
+        ("Configure gRPC Backend", step5_configure_grpc, True, None),    # Needs config
+        ("Configure Anti-Abuse Firewall", step6_configure_firewall, False, None),
+        ("Disable Nginx Logging", step7_disable_nginx_logging, False, None),
         ("Configure Hostname", step8_configure_hostname, False, args.hostname),  # Needs hostname
-        ("Final Check and Reboot", step9_final_check_and_reboot, False, args.yes),  # Needs non-interactive flag
+        ("Deploy Basic Nginx Config", step9_deploy_basic_nginx, False, args.domain),  # Needs domain
+        ("Obtain SSL Certificates", step10_obtain_ssl_cert, False, args.domain),  # Needs domain
+        ("Deploy Full Nginx + HAProxy Config", step11_deploy_full_config, False, args.domain),  # Needs domain
+        ("Final Check and Reboot", step12_final_check_and_reboot, False, None),
     ]
 
     total_steps = len(steps)
@@ -1683,12 +1659,6 @@ Examples:
 
     for i, (name, func, needs_config, param) in enumerate(steps, 1):
         print(f"\n{Colors.BOLD}Starting: {name}{Colors.ENDC}")
-
-        # Skip steps that require config if config is missing
-        if needs_config and not config_data:
-            print_error(f"Skipping {name} - missing configuration from previous step")
-            failed_steps.append(name)
-            continue
 
         # Pass config if step needs it, or hostname if provided
         if needs_config and config_data:
@@ -1711,17 +1681,11 @@ Examples:
             print_error(f"Failed: {name}\n")
             failed_steps.append(name)
 
-            # Ask if user wants to continue (skip in non-interactive mode)
-            if not args.yes:
-                try:
-                    response = input(f"{Colors.YELLOW}Continue with next step? [y/N]: {Colors.ENDC}")
-                    if response.lower() not in ['y', 'yes']:
-                        print_warning("Deployment aborted by user")
-                        break
-                except (EOFError, KeyboardInterrupt):
-                    print(f"\n{Colors.YELLOW}Non-interactive mode detected, continuing...{Colors.ENDC}")
-            else:
-                print_warning(f"Step failed but continuing (non-interactive mode)")
+            # Ask if user wants to continue
+            response = input(f"{Colors.YELLOW}Continue with next step? [y/N]: {Colors.ENDC}")
+            if response.lower() not in ['y', 'yes']:
+                print_warning("Deployment aborted by user")
+                break
 
     # Summary
     print_header("Deployment Summary")
