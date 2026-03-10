@@ -102,8 +102,7 @@ def step1_install_packages():
         "certbot",
         "python3-certbot-nginx",
         "mc",
-        "iperf3",
-        "iptables-persistent"
+        "iperf3"
     ]
 
     print_step(1, 3, "Updating package lists")
@@ -698,29 +697,46 @@ def step6_configure_firewall():
 
     print(f"\n  Summary: {added} rules added, {failed} failed")
 
-    print_step(3, 4, "Saving iptables rules")
+    print_step(3, 4, "Saving iptables rules and creating restore service")
 
-    # Try to save rules persistently
-    saved = False
-
-    # Try iptables-save to file
-    for rules_file in ["/etc/iptables/rules.v4", "/etc/iptables.rules"]:
-        os.makedirs(os.path.dirname(rules_file), exist_ok=True)
-        code, _, _ = run_command(f"iptables-save > {rules_file}", check=False)
-        if code == 0:
-            print(f"  ✓ Rules saved to {rules_file}")
-            saved = True
-            break
-
-    # Use netfilter-persistent (installed in Step 1)
-    code, _, _ = run_command("netfilter-persistent save", check=False)
+    # Save rules to file
+    rules_file = "/etc/iptables/rules.v4"
+    os.makedirs(os.path.dirname(rules_file), exist_ok=True)
+    code, _, err = run_command(f"iptables-save > {rules_file}", check=False)
     if code == 0:
-        print("  ✓ Rules saved with netfilter-persistent")
-        saved = True
+        print(f"  ✓ Rules saved to {rules_file}")
+    else:
+        print_warning(f"  Could not save rules: {err}")
 
-    if not saved:
-        print_warning("  Could not save rules persistently")
-        print_warning("  Rules may not survive reboot")
+    # Create systemd service to restore rules on boot
+    service_content = f"""[Unit]
+Description=Restore iptables rules
+Before=docker.service network.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iptables-restore {rules_file}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    service_file = "/etc/systemd/system/iptables-restore.service"
+    try:
+        with open(service_file, "w") as f:
+            f.write(service_content)
+        print(f"  ✓ Created {service_file}")
+
+        # Enable the service
+        code, _, _ = run_command("systemctl daemon-reload", check=False)
+        code, _, _ = run_command("systemctl enable iptables-restore.service", check=False)
+        if code == 0:
+            print("  ✓ Enabled iptables-restore service")
+        else:
+            print_warning("  Could not enable iptables-restore service")
+    except Exception as e:
+        print_warning(f"  Could not create restore service: {e}")
 
     print_step(4, 4, "Verifying rules")
 
@@ -738,7 +754,7 @@ def step6_configure_firewall():
 
         print(f"\n{Colors.YELLOW}Note:{Colors.ENDC}")
         print(f"  To view rules: iptables -L DOCKER-USER -n -v")
-        print(f"  Rules are persistent across reboots (iptables-persistent)")
+        print(f"  Rules are persistent across reboots (iptables-restore.service)")
 
         return True
     else:
@@ -1542,7 +1558,7 @@ def step12_final_check_and_reboot():
     print(f"\n{Colors.BOLD}{Colors.GREEN}Deployment completed successfully!{Colors.ENDC}\n")
 
     print(f"{Colors.BOLD}What was configured:{Colors.ENDC}")
-    print(f"  ✓ System packages (28 packages)")
+    print(f"  ✓ System packages (27 packages)")
     print(f"  ✓ Tailscale VPN")
     print(f"  ✓ Network optimizations (BBR, sysctl)")
     print(f"  ✓ 3x-ui Docker container")
