@@ -371,6 +371,7 @@ services:
       - "127.0.0.1:2053:2053"     # Admin panel (localhost only)
       - "127.0.0.1:10002:10000"   # gRPC endpoint for VLESS (localhost only)
       - "127.0.0.1:10003:10001"   # WebSocket endpoint for VLESS (localhost only)
+      - "127.0.0.1:8443:8443"     # Reality backend (for HAProxy routing)
 
     environment:
       - X_UI_PORT=2053
@@ -381,7 +382,6 @@ services:
 
     volumes:
       - ./data:/etc/x-ui
-      - /dev/shm:/dev/shm:rw    # Shared memory for Unix domain sockets
 
     privileged: true
     cap_add:
