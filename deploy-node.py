@@ -318,45 +318,44 @@ def step4_setup_3xui():
     """Deploy 3x-ui using Docker Compose"""
     print_header("STEP 4: Setting up 3x-ui Docker Container")
 
-    # Configuration prompts
-    print_step(1, 5, "Gathering configuration")
+    # Use default configuration (no user prompts)
+    print_step(1, 5, "Using default configuration")
 
-    deploy_dir = input(f"{Colors.CYAN}Deployment directory [{Colors.BOLD}/opt/3x-ui{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
-    if not deploy_dir:
-        deploy_dir = "/opt/3x-ui"
-
-    admin_user = input(f"{Colors.CYAN}Admin username [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
-    if not admin_user:
-        admin_user = "admin"
-
-    admin_pass = input(f"{Colors.CYAN}Admin password [{Colors.BOLD}admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
-    if not admin_pass:
-        admin_pass = "admin"
-
-    panel_path = input(f"{Colors.CYAN}Panel URL path [{Colors.BOLD}/admin{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
-    if not panel_path:
-        panel_path = "/admin"
+    deploy_dir = "/opt/3x-ui"
+    admin_user = "admin"
+    admin_pass = "admin"
+    panel_path = "/admin"
 
     print(f"\n  Deployment dir: {deploy_dir}")
     print(f"  Admin username: {admin_user}")
     print(f"  Admin password: {'*' * len(admin_pass)}")
     print(f"  Panel path: {panel_path}")
 
-    print_step(2, 5, "Creating deployment directory")
-    if os.path.exists(deploy_dir):
-        print_warning(f"Directory {deploy_dir} already exists")
-        response = input(f"{Colors.YELLOW}Continue anyway? [y/N]: {Colors.ENDC}")
-        if response.lower() not in ['y', 'yes']:
-            print_warning("Skipping 3x-ui setup")
-            return False
-    else:
+    # Check if container already running
+    print_step(2, 5, "Checking for existing container")
+    code, out, _ = run_command("docker ps --filter name=3x-ui --format '{{.Names}}'", check=False)
+    if code == 0 and "3x-ui" in out:
+        print_success("3x-ui container already running, skipping deployment")
+        # Return existing config
+        return {
+            "deploy_dir": deploy_dir,
+            "admin_user": admin_user,
+            "admin_pass": admin_pass,
+            "panel_path": panel_path
+        }
+
+    # Create deployment directory if needed
+    print_step(3, 5, "Creating deployment directory")
+    if not os.path.exists(deploy_dir):
         code, _, err = run_command(f"mkdir -p {deploy_dir}", check=False)
         if code != 0:
             print_error(f"Failed to create directory: {err}")
             return False
         print_success(f"Created {deploy_dir}")
+    else:
+        print(f"  Directory {deploy_dir} exists")
 
-    print_step(3, 5, "Generating docker-compose.yml")
+    print_step(4, 5, "Generating docker-compose.yml")
 
     # Embedded docker-compose.yml template
     docker_compose_template = f'''version: '3.8'
@@ -408,7 +407,7 @@ services:
         print_error(f"Failed to write docker-compose.yml: {e}")
         return False
 
-    print_step(4, 5, "Starting 3x-ui container")
+    print_step(5, 5, "Starting and verifying 3x-ui container")
     code, out, err = run_command(f"cd {deploy_dir} && docker compose up -d", check=False)
 
     if code != 0:
@@ -419,7 +418,7 @@ services:
     print_success("Container started")
     print(out)
 
-    print_step(5, 5, "Verifying container is running")
+    # Verify container is running
     time.sleep(3)  # Wait for container to initialize
 
     code, out, err = run_command("docker ps --filter name=3x-ui --format '{{.Names}}\t{{.Status}}'", check=False)
