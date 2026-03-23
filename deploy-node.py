@@ -368,8 +368,8 @@ services:
 
     ports:
       - "127.0.0.1:2053:2053"     # Admin panel (localhost only)
-      - "127.0.0.1:10002:10000"   # gRPC endpoint for VLESS (localhost only)
-      - "127.0.0.1:10003:10001"   # WebSocket endpoint for VLESS (localhost only)
+      - "127.0.0.1:10000:10000"   # gRPC endpoint for VLESS (for HAProxy routing)
+      - "127.0.0.1:10001:10001"   # XHTTP endpoint for VLESS (for HAProxy routing)
       - "127.0.0.1:8443:8443"     # Reality backend (for HAProxy routing)
 
     environment:
@@ -448,12 +448,12 @@ services:
 
 
 # ============================================================================
-# STEP 5: Wait for health and create gRPC inbound with Unix socket
+# STEP 5: Wait for health and create VLESS inbounds
 # ============================================================================
 
 def step5_configure_grpc(config: dict):
-    """Wait for container health, read credentials, and create gRPC inbound with Unix socket"""
-    print_header("STEP 5: Configuring gRPC Backend with Unix Socket")
+    """Wait for container health, read credentials, and create 3 VLESS inbounds"""
+    print_header("STEP 5: Configuring VLESS Inbounds")
 
     if not config or not isinstance(config, dict):
         print_error("No configuration from previous step")
@@ -530,7 +530,7 @@ def step5_configure_grpc(config: dict):
     else:
         print_warning(f"Credentials file not found, using configured credentials")
 
-    print_step(3, 4, "Creating gRPC inbound with Unix socket")
+    print_step(3, 4, "Creating VLESS inbounds")
 
     # Import x_ui_client
     try:
@@ -540,11 +540,6 @@ def step5_configure_grpc(config: dict):
         print_error(f"Failed to import x_ui_client: {e}")
         print("  Please ensure x_ui_client is available")
         return False
-
-    # Create inbound with Unix socket
-    socket_path = "/dev/shm/xui-grpc.sock"
-    print(f"  Socket: {socket_path},0666")
-    print(f"  Service name: api")
 
     try:
         client = XUIClient(
@@ -557,46 +552,118 @@ def step5_configure_grpc(config: dict):
         client.login()
         print("  ✓ Authenticated to 3x-ui API")
 
-        inbound_config = {
-            "enable": True,
-            "port": 0,  # Port 0 for Unix socket
-            "protocol": "vless",
-            "listen": f"{socket_path},0666",  # Unix socket with permissions
-            "settings": json.dumps({
-                "clients": [],  # Empty - add clients later
-                "decryption": "none",
-                "fallbacks": []
-            }),
-            "streamSettings": json.dumps({
-                "network": "grpc",
-                "security": "none",
-                "grpcSettings": {
-                    "serviceName": "api",
-                    "multiMode": False
+        # Define the 3 inbounds to create
+        inbounds_to_create = [
+            {
+                "remark": "vless-grpc",
+                "port": 10000,
+                "protocol": "vless",
+                "listen": "",
+                "settings": {
+                    "clients": [],
+                    "decryption": "none",
+                    "fallbacks": []
+                },
+                "streamSettings": {
+                    "network": "grpc",
+                    "security": "none",
+                    "grpcSettings": {
+                        "serviceName": "sync",
+                        "multiMode": False
+                    }
+                },
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": ["http", "tls"]
                 }
-            }),
-            "sniffing": json.dumps({
-                "enabled": True,
-                "destOverride": ["http", "tls"]
-            }),
-            "remark": "VLESS-gRPC-Local",
-            "allocate": json.dumps({
-                "strategy": "always",
-                "refresh": 5,
-                "concurrency": 3
-            })
-        }
+            },
+            {
+                "remark": "vless-xhttp",
+                "port": 10001,
+                "protocol": "vless",
+                "listen": "",
+                "settings": {
+                    "clients": [],
+                    "decryption": "none",
+                    "fallbacks": []
+                },
+                "streamSettings": {
+                    "network": "xhttp",
+                    "security": "none",
+                    "xhttpSettings": {
+                        "path": "/api",
+                        "mode": "auto"
+                    }
+                },
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": ["http", "tls"]
+                }
+            },
+            {
+                "remark": "vless-reality",
+                "port": 8443,
+                "protocol": "vless",
+                "listen": "",
+                "settings": {
+                    "clients": [],
+                    "decryption": "none",
+                    "fallbacks": []
+                },
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "show": False,
+                        "dest": "www.apple.com:443",
+                        "xver": 0,
+                        "serverNames": ["www.apple.com"],
+                        "privateKey": "",  # Will be auto-generated by 3x-ui
+                        "shortIds": [""],
+                        "settings": {
+                            "publicKey": "",  # Will be auto-generated by 3x-ui
+                            "fingerprint": "chrome",
+                            "spiderX": "/"
+                        }
+                    }
+                },
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": ["http", "tls"]
+                }
+            }
+        ]
 
-        success = client.add_inbound(inbound_config)
+        created_count = 0
+        for inbound_data in inbounds_to_create:
+            inbound_config = {
+                "enable": True,
+                "port": inbound_data["port"],
+                "protocol": inbound_data["protocol"],
+                "listen": inbound_data["listen"],
+                "settings": json.dumps(inbound_data["settings"]),
+                "streamSettings": json.dumps(inbound_data["streamSettings"]),
+                "sniffing": json.dumps(inbound_data["sniffing"]),
+                "remark": inbound_data["remark"]
+            }
 
-        if success:
-            print_success("gRPC inbound created with Unix socket")
-        else:
-            print_error("Failed to create inbound")
+            success = client.add_inbound(inbound_config)
+            if success:
+                print(f"  ✓ Created {inbound_data['remark']} on port {inbound_data['port']}")
+                created_count += 1
+            else:
+                print_warning(f"  Failed to create {inbound_data['remark']}")
+
+        if created_count == 0:
+            print_error("Failed to create any inbounds")
             return False
+        elif created_count < len(inbounds_to_create):
+            print_warning(f"Only created {created_count}/{len(inbounds_to_create)} inbounds")
+        else:
+            print_success(f"Created all {created_count} inbounds")
 
     except Exception as e:
-        print_error(f"Failed to create gRPC inbound: {e}")
+        print_error(f"Failed to create inbounds: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -607,19 +674,20 @@ def step5_configure_grpc(config: dict):
     print(f"  Panel URL: http://localhost:2053{config['panel_path']}")
     print(f"  Username: {actual_user}")
     print(f"  Password: {actual_pass}")
-    print(f"\n{Colors.BOLD}gRPC Configuration:{Colors.ENDC}")
-    print(f"  Transport: Unix Socket")
-    print(f"  Socket: {socket_path}")
-    print(f"  Permissions: 0666")
-    print(f"  Service Name: api")
+    print(f"\n{Colors.BOLD}Inbounds Created:{Colors.ENDC}")
+    print(f"  1. vless-grpc (port 10000) - gRPC transport")
+    print(f"  2. vless-xhttp (port 10001) - XHTTP transport")
+    print(f"  3. vless-reality (port 8443) - Reality anti-censorship")
     print(f"\n{Colors.BOLD}Port Mappings:{Colors.ENDC}")
-    print(f"  gRPC: 127.0.0.1:10002 → container:10000")
-    print(f"  WebSocket: 127.0.0.1:10003 → container:10001")
+    print(f"  Admin: 127.0.0.1:2053 → container:2053")
+    print(f"  gRPC: 127.0.0.1:10000 → container:10000")
+    print(f"  XHTTP: 127.0.0.1:10001 → container:10001")
+    print(f"  Reality: 127.0.0.1:8443 → container:8443")
     print(f"\n{Colors.BOLD}Next Steps:{Colors.ENDC}")
     print(f"  1. Point DNS to this server")
     print(f"  2. Obtain SSL certificates with certbot")
-    print(f"  3. Deploy nginx/HAProxy with Ansible")
-    print(f"  4. Add clients using xui-client script")
+    print(f"  3. Deploy nginx/HAProxy config")
+    print(f"  4. Add clients via 3x-ui panel or API")
 
     return True
 
