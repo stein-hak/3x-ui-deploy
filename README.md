@@ -5,7 +5,8 @@ Automated deployment script for 3x-ui VLESS proxy nodes. Deploys a complete prod
 ## Features
 
 - ✅ **Fully automated** - one command deployment
-- ✅ **36 system packages** - Docker, nginx, WireGuard, monitoring tools
+- ✅ **37 system packages** - Docker, nginx, HAProxy, WireGuard, monitoring tools
+- ✅ **SNI-based routing** - HAProxy support for Reality + gRPC/XHTTP on same port
 - ✅ **Tailscale VPN** - ready to connect
 - ✅ **2-hop VPN support** - WireGuard, iptables, conntrack for chaining
 - ✅ **Prometheus metrics** - node-exporter for monitoring (port 9100)
@@ -66,10 +67,10 @@ sudo ./deploy-node.py
 
 ## What Gets Deployed
 
-### Step 1: Install Required Packages (36 packages)
+### Step 1: Install Required Packages (37 packages)
 - **Adds Fluent Bit repository** automatically (official packages.fluentbit.io)
 - Docker, docker-compose-v2
-- nginx, certbot
+- nginx, haproxy, certbot
 - Monitoring: htop, iftop, nload, atop, speedtest-cli, prometheus-node-exporter, fluent-bit
 - Network: socat, iperf3, wireguard, wireguard-tools, conntrack
 - Utilities: vim, nano, screen, mc, jq
