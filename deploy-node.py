@@ -1667,8 +1667,8 @@ Examples:
         ("Install Required Packages", step1_install_packages, False, None),
         ("Install Tailscale", step2_install_tailscale, False, None),
         ("Optimize sysctl Values", step3_optimize_sysctl, False, None),
-        ("Setup 3x-ui Docker Container", step4_setup_3xui, True, None),  # Returns config
-        ("Configure gRPC Backend", step5_configure_grpc, True, None),    # Needs config
+        ("Setup 3x-ui Docker Container", step4_setup_3xui, False, None),  # Returns config
+        ("Configure gRPC Backend", step5_configure_grpc, True, None),    # Needs config from step4
         ("Configure Anti-Abuse Firewall", step6_configure_firewall, False, None),
         ("Disable Nginx Logging", step7_disable_nginx_logging, False, None),
         ("Configure Hostname", step8_configure_hostname, False, args.hostname),  # Needs hostname
