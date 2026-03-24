@@ -1392,9 +1392,9 @@ server {{
     gzip_min_length 1000;
     gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss application/atom+xml image/svg+xml;
 
-    # gRPC Backend - /sync -> 127.0.0.1:10002
+    # gRPC Backend - /sync -> 127.0.0.1:10000
     location /sync {{
-        grpc_pass grpc://127.0.0.1:10002;
+        grpc_pass grpc://127.0.0.1:10000;
         grpc_buffer_size 128k;
         grpc_socket_keepalive on;
         grpc_read_timeout 60s;
@@ -1408,9 +1408,9 @@ server {{
         grpc_set_header X-Forwarded-Host $host;
     }}
 
-    # WebSocket Backend - /ws -> 127.0.0.1:10003
-    location /ws {{
-        proxy_pass http://127.0.0.1:10003;
+    # XHTTP Backend - /api -> 127.0.0.1:10001
+    location /api {{
+        proxy_pass http://127.0.0.1:10001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -1544,8 +1544,14 @@ frontend tls_frontend
     tcp-request inspect-delay 5s
     tcp-request content accept if {{ req_ssl_hello_type 1 }}
 
-    # Route {domain} to nginx backend (port 8080)
+    # Route {domain} to nginx backend (port 8080) - serves gRPC and XHTTP
     use_backend nginx_backend if {{ req_ssl_sni -i {domain} }}
+
+    # Route api.{domain} to gRPC backend (port 10000)
+    use_backend xray_grpc if {{ req_ssl_sni -i api.{domain} }}
+
+    # Route app.{domain} to XHTTP backend (port 10001)
+    use_backend xray_xhttp if {{ req_ssl_sni -i app.{domain} }}
 
     # All other SNI goes to Reality backend (port 8443)
     default_backend xray_reality
@@ -1554,6 +1560,16 @@ backend nginx_backend
     mode tcp
     option tcp-check
     server nginx1 127.0.0.1:8080 check inter 5s rise 2 fall 3
+
+backend xray_grpc
+    mode tcp
+    option tcp-check
+    server xray_grpc1 127.0.0.1:10000 check inter 5s rise 2 fall 3
+
+backend xray_xhttp
+    mode tcp
+    option tcp-check
+    server xray_xhttp1 127.0.0.1:10001 check inter 5s rise 2 fall 3
 
 backend xray_reality
     mode tcp
@@ -1618,10 +1634,11 @@ listen stats
     print(f"  Nginx HTTP: port 80 (static + ACME)")
     print(f"  Nginx HTTPS: port 8080 (backends)")
     print(f"  HAProxy: port 443 (SNI routing)")
-    print(f"\n{Colors.BOLD}Traffic Flow:{Colors.ENDC}")
-    print(f"  Client → HAProxy:443 → Nginx:8080 → Backends")
-    print(f"    /sync → gRPC:10002")
-    print(f"    /ws   → WebSocket:10003")
+    print(f"\n{Colors.BOLD}SNI Routing:{Colors.ENDC}")
+    print(f"  {domain}        → Nginx:8080 → gRPC:10000, XHTTP:10001")
+    print(f"  api.{domain}    → gRPC:10000 (direct)")
+    print(f"  app.{domain}    → XHTTP:10001 (direct)")
+    print(f"  Other SNI       → Reality:8443")
 
     return True
 
