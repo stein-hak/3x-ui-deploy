@@ -381,6 +381,7 @@ services:
 
     volumes:
       - ./data:/etc/x-ui
+      - ./ssl:/etc/x-ui/cert:ro
 
     privileged: true
     cap_add:
@@ -1136,7 +1137,20 @@ def step10_obtain_ssl_cert(domain: str = None):
         print_success(f"SSL certificates already exist: {cert_dir}")
         print(f"  ✓ {cert_dir}/fullchain.pem")
         print(f"  ✓ {cert_dir}/privkey.pem")
-        print("\n  Skipping certificate acquisition")
+
+        # Copy to /opt/3x-ui/ssl if not already there
+        ssl_dest = "/opt/3x-ui/ssl"
+        if not os.path.exists(f"{ssl_dest}/fullchain.pem"):
+            print("\n  Copying certificates to 3x-ui...")
+            code, _, _ = run_command(f"mkdir -p {ssl_dest}", check=False)
+            if code == 0:
+                copy_cmd = f"cp {cert_dir}/fullchain.pem {cert_dir}/privkey.pem {ssl_dest}/"
+                code, _, _ = run_command(copy_cmd, check=False)
+                if code == 0:
+                    print(f"  ✓ Certificates copied to {ssl_dest}/")
+        else:
+            print(f"  ✓ Certificates already in {ssl_dest}/")
+
         return domain
 
     print_step(1, 3, "Checking DNS propagation")
@@ -1213,7 +1227,57 @@ def step10_obtain_ssl_cert(domain: str = None):
                 all_exist = False
 
         if all_exist:
-            print_step(3, 3, "SSL certificate ready")
+            print_step(3, 3, "Copying certificates to 3x-ui")
+
+            # Copy certificates to /opt/3x-ui/ssl for docker mount
+            ssl_dest = "/opt/3x-ui/ssl"
+            code, _, _ = run_command(f"mkdir -p {ssl_dest}", check=False)
+
+            if code == 0:
+                # Copy certificates
+                copy_cmd = f"cp {cert_dir}/fullchain.pem {cert_dir}/privkey.pem {ssl_dest}/"
+                code, _, err = run_command(copy_cmd, check=False)
+
+                if code == 0:
+                    print(f"  ✓ Certificates copied to {ssl_dest}/")
+                    print(f"    - fullchain.pem")
+                    print(f"    - privkey.pem")
+
+                    # Create renewal hook to copy certificates on renewal
+                    hook_script = "/etc/letsencrypt/renewal-hooks/deploy/copy-to-3xui.sh"
+                    hook_content = f"""#!/bin/bash
+# Copy SSL certificates to 3x-ui on renewal
+DOMAIN="{domain}"
+CERT_DIR="/etc/letsencrypt/live/$DOMAIN"
+DEST_DIR="/opt/3x-ui/ssl"
+
+mkdir -p "$DEST_DIR"
+cp "$CERT_DIR/fullchain.pem" "$CERT_DIR/privkey.pem" "$DEST_DIR/"
+chmod 644 "$DEST_DIR/fullchain.pem" "$DEST_DIR/privkey.pem"
+
+# Restart 3x-ui container to reload certificates
+docker restart 3x-ui 2>/dev/null || true
+
+echo "Certificates copied to $DEST_DIR and 3x-ui restarted"
+"""
+
+                    try:
+                        # Create hook directory
+                        run_command("mkdir -p /etc/letsencrypt/renewal-hooks/deploy", check=False)
+
+                        # Write hook script
+                        with open(hook_script, 'w') as f:
+                            f.write(hook_content)
+
+                        # Make executable
+                        run_command(f"chmod +x {hook_script}", check=False)
+                        print(f"  ✓ Created certbot renewal hook: {hook_script}")
+                    except Exception as e:
+                        print_warning(f"Could not create renewal hook: {e}")
+
+                else:
+                    print_warning(f"Could not copy certificates: {err}")
+
             return domain  # Return domain for next step
         else:
             print_error("Some certificate files are missing")
