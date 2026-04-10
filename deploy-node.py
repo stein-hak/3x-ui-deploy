@@ -101,8 +101,7 @@ def step1_install_packages():
         "certbot",
         "python3-certbot-nginx",
         "mc",
-        "iperf3",
-        "iptables-persistent"
+        "iperf3"
     ]
 
     print_step(1, 4, "Checking for existing Docker installation")
