@@ -86,6 +86,7 @@ def step1_install_packages():
     """Install all required system packages"""
     print_header("STEP 1: Installing Required Packages")
 
+    # Base packages (always install)
     packages = [
         "curl", "wget", "ca-certificates", "gnupg", "lsb-release",
         "vim", "nano",
@@ -97,22 +98,52 @@ def step1_install_packages():
         "socat",
         "ufw",
         "nginx",
-        "docker.io",
-        "docker-compose-v2",
         "certbot",
         "python3-certbot-nginx",
         "mc",
-        "iperf3"
+        "iperf3",
+        "iptables-persistent"
     ]
 
-    print_step(1, 3, "Updating package lists")
+    print_step(1, 4, "Checking for existing Docker installation")
+
+    # Check if Docker is already installed (docker-ce or docker.io)
+    docker_installed = False
+    docker_type = None
+
+    code_ce, _, _ = run_command("dpkg -l | grep -E '^ii.*docker-ce'", check=False)
+    code_io, _, _ = run_command("dpkg -l | grep -E '^ii.*docker.io'", check=False)
+    code_bin, _, _ = run_command("which docker", check=False)
+
+    if code_ce == 0:
+        docker_type = "Docker CE (official)"
+        docker_installed = True
+        print(f"  ✓ {docker_type} already installed")
+    elif code_io == 0:
+        docker_type = "docker.io (Ubuntu)"
+        docker_installed = True
+        print(f"  ✓ {docker_type} already installed")
+    elif code_bin == 0:
+        docker_type = "Docker (unknown source)"
+        docker_installed = True
+        print(f"  ⚠ {docker_type} detected")
+    else:
+        print("  ○ No Docker installation found")
+        # Add docker packages if not installed
+        packages.extend(["docker.io", "docker-compose-v2"])
+        docker_type = "docker.io (will install)"
+
+    if docker_installed:
+        print_warning("Skipping docker.io and docker-compose-v2 to avoid conflicts")
+
+    print_step(2, 4, "Updating package lists")
     code, out, err = run_command("apt update", check=False)
     if code != 0:
         print_error(f"Failed to update package lists: {err}")
         return False
     print_success("Package lists updated")
 
-    print_step(2, 3, f"Installing {len(packages)} packages")
+    print_step(3, 4, f"Installing {len(packages)} packages")
     print(f"  Packages: {', '.join(packages[:5])}... (and {len(packages)-5} more)")
 
     # Install packages with -y flag to auto-confirm
@@ -126,7 +157,7 @@ def step1_install_packages():
 
     print_success(f"All {len(packages)} packages installed successfully")
 
-    print_step(3, 3, "Verifying critical packages")
+    print_step(4, 4, "Verifying critical packages")
     critical = ["docker", "nginx", "certbot"]
     all_ok = True
 
