@@ -567,13 +567,16 @@ def step5_configure_grpc(config: dict):
 
     print_step(3, 4, "Creating VLESS inbounds")
 
-    # Import x_ui_client
+    # Import x_ui_client from script directory
     try:
-        sys.path.insert(0, '/home/stein/python/3x-ui')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, script_dir)
         from x_ui_client import XUIClient
     except ImportError as e:
         print_error(f"Failed to import x_ui_client: {e}")
-        print("  Please ensure x_ui_client is available")
+        print(f"  Script directory: {script_dir}")
+        print("  Please ensure x_ui_client submodule is initialized:")
+        print("  git submodule update --init --recursive")
         return False
 
     try:
