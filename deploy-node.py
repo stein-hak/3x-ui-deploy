@@ -102,7 +102,8 @@ def step1_install_packages():
         "certbot",
         "python3-certbot-nginx",
         "mc",
-        "iperf3"
+        "iperf3",
+        "wireguard", "wireguard-tools"
     ]
 
     print_step(1, 4, "Checking for existing Docker installation")
@@ -1745,6 +1746,251 @@ listen stats
 
 
 # ============================================================================
+# PROXY MODE: Deploy HAProxy Passthrough with Local Decoy
+# ============================================================================
+
+def step_proxy_deploy_haproxy(domain: str = None, backend_ip: str = None):
+    """Deploy HAProxy in proxy mode - SNI routing to backend with local decoy"""
+    print_header("PROXY MODE: Deploying HAProxy Passthrough")
+
+    if not domain:
+        print_error("Domain is required for proxy mode!")
+        print("  Run with: --proxy --domain domain1.com,domain2.com --backend BACKEND_IP")
+        return False
+
+    if not backend_ip:
+        print_warning("No backend IP specified")
+        backend_ip = input(f"{Colors.YELLOW}Enter backend server IP (e.g., 77.237.243.130): {Colors.ENDC}").strip()
+        if not backend_ip:
+            print_error("Backend IP is required!")
+            return False
+
+    # Parse multiple domains (comma-separated)
+    domains = [d.strip() for d in domain.split(',')]
+    primary_domain = domains[0]
+
+    print(f"  Proxy domains: {', '.join(domains)}")
+    print(f"  Primary domain: {primary_domain}")
+    print(f"  Backend server: {backend_ip}:443")
+
+    # Verify SSL certificates exist for primary domain
+    cert_dir = f"/etc/letsencrypt/live/{primary_domain}"
+    if not os.path.exists(f"{cert_dir}/fullchain.pem"):
+        print_error(f"SSL certificate not found: {cert_dir}/fullchain.pem")
+        print("  Run certbot first to obtain SSL certificates for all domains")
+        return False
+
+    print_step(1, 4, "Installing HAProxy")
+    code, out, err = run_command("apt install -y haproxy", check=False)
+    if code != 0:
+        print_error(f"Failed to install HAProxy: {err}")
+        return False
+    print_success("HAProxy installed")
+
+    print_step(2, 4, "Creating HAProxy configuration")
+
+    # Generate SNI rules for all domains
+    sni_rules = []
+    for d in domains:
+        sni_rules.append(f"    use_backend local_nginx if {{{{ req_ssl_sni -i {d} }}}}")
+        sni_rules.append(f"    use_backend local_nginx if {{{{ req_ssl_sni -i www.{d} }}}}")
+    sni_rules_str = "\n".join(sni_rules)
+
+    haproxy_config = f"""# HAProxy Configuration - Proxy Mode (SNI Routing)
+# Domains: {', '.join(domains)}
+# Backend: {backend_ip}:443
+
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+
+defaults
+    log     global
+    mode    tcp
+    option  tcplog
+    option  dontlognull
+
+    timeout connect 10s
+    timeout client  1h
+    timeout server  1h
+    timeout client-fin 30s
+    timeout server-fin 30s
+
+# Frontend - SNI-based routing
+frontend tls_frontend
+    bind *:443
+    mode tcp
+
+    tcp-request inspect-delay 5s
+    tcp-request content accept if {{{{ req_ssl_hello_type 1 }}}}
+
+    # Local decoy for proxy domains (browsers)
+{sni_rules_str}
+
+    # All other SNI (VPN traffic) → backend server
+    default_backend remote_backend
+
+# Backend - Local nginx decoy
+backend local_nginx
+    mode tcp
+    option tcp-check
+    server nginx1 127.0.0.1:8080 check inter 5s rise 2 fall 3
+
+# Backend - Remote 3x-ui server
+backend remote_backend
+    mode tcp
+    option tcp-check
+    server backend1 {backend_ip}:443 check inter 5s rise 2 fall 3
+
+# Stats interface
+listen stats
+    bind 127.0.0.1:8404
+    mode http
+    stats enable
+    stats uri /stats
+    stats refresh 30s
+    stats admin if TRUE
+"""
+
+    try:
+        with open("/etc/haproxy/haproxy.cfg", "w") as f:
+            f.write(haproxy_config)
+        print_success("HAProxy configuration created")
+    except Exception as e:
+        print_error(f"Failed to write HAProxy config: {e}")
+        return False
+
+    print_step(3, 4, "Deploying local nginx decoy")
+
+    config_name = primary_domain.replace(".", "_")
+    domains_str = ' '.join(domains)
+
+    nginx_config = f"""# Nginx Decoy Configuration - Proxy Mode
+# Domains: {', '.join(domains)}
+
+# HTTP on public interface (port 80)
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domains_str};
+
+    server_tokens off;
+
+    root /var/www/site;
+    index index.html;
+    access_log off;
+    error_log /dev/null crit;
+
+    # ACME challenge location
+    location /.well-known/acme-challenge/ {{
+        root /var/www/html;
+        try_files $uri =404;
+    }}
+
+    # Static content
+    location / {{
+        try_files $uri $uri/ =404;
+    }}
+}}
+
+# HTTPS on localhost (port 8080) - forwarded from HAProxy
+server {{
+    listen 127.0.0.1:8080 ssl http2;
+    server_name {domains_str};
+
+    server_tokens off;
+
+    # SSL/TLS Configuration
+    ssl_certificate {cert_dir}/fullchain.pem;
+    ssl_certificate_key {cert_dir}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!eNULL:!MD5:!DES:!RC4:!ADH:!SSLv3:!EXP:!PSK:!DSS;
+    ssl_prefer_server_ciphers off;
+
+    root /var/www/site;
+    index index.html;
+    access_log off;
+    error_log /dev/null crit;
+
+    # Security Headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    location / {{
+        try_files $uri $uri/ =404;
+    }}
+
+    location /status {{
+        default_type application/json;
+        return 200 '{{"status":"ok","mode":"proxy"}}';
+    }}
+}}
+"""
+
+    try:
+        with open(f"/etc/nginx/sites-available/{config_name}", "w") as f:
+            f.write(nginx_config)
+
+        # Enable site
+        symlink = f"/etc/nginx/sites-enabled/{config_name}"
+        if os.path.exists(symlink):
+            os.remove(symlink)
+        os.symlink(f"/etc/nginx/sites-available/{config_name}", symlink)
+
+        print_success("Nginx decoy configuration created")
+    except Exception as e:
+        print_error(f"Failed to write nginx config: {e}")
+        return False
+
+    print_step(4, 4, "Starting services")
+
+    # Test and reload nginx
+    code, out, err = run_command("nginx -t", check=False)
+    if code != 0:
+        print_error(f"Nginx config test failed: {err}")
+        return False
+
+    run_command("systemctl reload nginx", check=False)
+    print_success("Nginx reloaded")
+
+    # Restart HAProxy
+    code, out, err = run_command("systemctl restart haproxy", check=False)
+    if code != 0:
+        print_error(f"Failed to start HAProxy: {err}")
+        return False
+
+    code, out, err = run_command("systemctl enable haproxy", check=False)
+    print_success("HAProxy started and enabled")
+
+    # Verify services
+    time.sleep(2)
+    code, _, _ = run_command("systemctl is-active haproxy", check=False)
+    if code == 0:
+        print_success("HAProxy is running")
+    else:
+        print_warning("HAProxy may not be running properly")
+
+    print(f"\n{Colors.GREEN}Proxy mode deployment complete!{Colors.ENDC}\n")
+    print(f"{Colors.BOLD}Configuration:{Colors.ENDC}")
+    print(f"  Proxy domains: {', '.join(domains)}")
+    print(f"  Primary domain: {primary_domain}")
+    print(f"  Backend server: {backend_ip}:443")
+    print(f"  Local decoy: Nginx on 127.0.0.1:8080")
+    print(f"  HAProxy stats: http://127.0.0.1:8404/stats")
+
+    return True
+
+
+# ============================================================================
 # STEP 12: Final Check and Reboot
 # ============================================================================
 
@@ -1889,10 +2135,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Full node deployment
   sudo ./deploy-node.py
   sudo ./deploy-node.py --hostname node-vienna
   sudo ./deploy-node.py --hostname vpn-server-01 --domain maptrail.shop
   sudo ./deploy-node.py --domain lionhex.xyz
+
+  # Proxy mode (HAProxy passthrough to backend)
+  sudo ./deploy-node.py --proxy --domain example.com --backend 10.20.30.40
+  sudo ./deploy-node.py --proxy --hostname proxy-node --domain example.com,api.example.com --backend 10.20.30.40
         """
     )
     parser.add_argument(
@@ -1903,7 +2154,17 @@ Examples:
     parser.add_argument(
         '--domain',
         type=str,
-        help='Domain name for nginx/HAProxy configuration (optional)'
+        help='Domain name for nginx/HAProxy configuration (optional, comma-separated for multiple domains)'
+    )
+    parser.add_argument(
+        '--proxy',
+        action='store_true',
+        help='Enable proxy mode (deploy HAProxy passthrough, skip 3x-ui installation)'
+    )
+    parser.add_argument(
+        '--backend',
+        type=str,
+        help='Backend server IP for proxy mode (required when --proxy is used)'
     )
     args = parser.parse_args()
 
@@ -1912,21 +2173,37 @@ Examples:
     # Check if running as root
     check_root()
 
-    # Run steps
-    steps = [
-        ("Install Required Packages", step1_install_packages, False, None),
-        ("Install Tailscale", step2_install_tailscale, False, None),
-        ("Optimize sysctl Values", step3_optimize_sysctl, False, None),
-        ("Setup 3x-ui Docker Container", step4_setup_3xui, False, args.domain),  # Returns config, needs domain
-        ("Configure gRPC Backend", step5_configure_grpc, True, None),    # Needs config from step4
-        ("Configure Anti-Abuse Firewall", step6_configure_firewall, False, None),
-        ("Disable Nginx Logging", step7_disable_nginx_logging, False, None),
-        ("Configure Hostname", step8_configure_hostname, False, args.hostname),  # Needs hostname
-        ("Deploy Basic Nginx Config", step9_deploy_basic_nginx, False, args.domain),  # Needs domain
-        ("Obtain SSL Certificates", step10_obtain_ssl_cert, False, args.domain),  # Needs domain
-        ("Deploy Full Nginx + HAProxy Config", step11_deploy_full_config, False, args.domain),  # Needs domain
-        ("Final Check and Reboot", step12_final_check_and_reboot, False, None),
-    ]
+    # Define steps based on mode (proxy vs full node)
+    if args.proxy:
+        # Proxy mode: Skip 3x-ui installation, deploy HAProxy passthrough
+        steps = [
+            ("Install Required Packages", step1_install_packages, False, None),
+            ("Install Tailscale", step2_install_tailscale, False, None),
+            ("Optimize sysctl Values", step3_optimize_sysctl, False, None),
+            ("Configure Anti-Abuse Firewall", step6_configure_firewall, False, None),
+            ("Disable Nginx Logging", step7_disable_nginx_logging, False, None),
+            ("Configure Hostname", step8_configure_hostname, False, args.hostname),
+            ("Deploy Basic Nginx Config", step9_deploy_basic_nginx, False, args.domain),
+            ("Obtain SSL Certificates", step10_obtain_ssl_cert, False, args.domain),
+            ("Deploy HAProxy Proxy Mode", step_proxy_deploy_haproxy, False, (args.domain, args.backend)),
+            ("Final Check and Reboot", step12_final_check_and_reboot, False, None),
+        ]
+    else:
+        # Full node mode: Standard 3x-ui deployment
+        steps = [
+            ("Install Required Packages", step1_install_packages, False, None),
+            ("Install Tailscale", step2_install_tailscale, False, None),
+            ("Optimize sysctl Values", step3_optimize_sysctl, False, None),
+            ("Setup 3x-ui Docker Container", step4_setup_3xui, False, args.domain),  # Returns config, needs domain
+            ("Configure gRPC Backend", step5_configure_grpc, True, None),    # Needs config from step4
+            ("Configure Anti-Abuse Firewall", step6_configure_firewall, False, None),
+            ("Disable Nginx Logging", step7_disable_nginx_logging, False, None),
+            ("Configure Hostname", step8_configure_hostname, False, args.hostname),  # Needs hostname
+            ("Deploy Basic Nginx Config", step9_deploy_basic_nginx, False, args.domain),  # Needs domain
+            ("Obtain SSL Certificates", step10_obtain_ssl_cert, False, args.domain),  # Needs domain
+            ("Deploy Full Nginx + HAProxy Config", step11_deploy_full_config, False, args.domain),  # Needs domain
+            ("Final Check and Reboot", step12_final_check_and_reboot, False, None),
+        ]
 
     total_steps = len(steps)
     failed_steps = []
@@ -1945,7 +2222,11 @@ Examples:
         if needs_config and config_data:
             result = func(config_data)
         elif param is not None:
-            result = func(param)
+            # Handle tuple params (for functions needing multiple args)
+            if isinstance(param, tuple):
+                result = func(*param)
+            else:
+                result = func(param)
         else:
             result = func()
 
