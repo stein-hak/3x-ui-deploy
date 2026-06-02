@@ -1424,14 +1424,19 @@ def step11_deploy_full_config(domain: str = None):
         print_warning("No domain configured, skipping full configuration")
         return True
 
-    # Verify SSL certificates exist
-    cert_dir = f"/etc/letsencrypt/live/{domain}"
+    # Parse multiple domains (comma-separated) - certbot stores in primary domain dir
+    domains = [d.strip() for d in domain.split(',')]
+    primary_domain = domains[0]
+
+    # Verify SSL certificates exist (stored under primary domain)
+    cert_dir = f"/etc/letsencrypt/live/{primary_domain}"
     if not os.path.exists(f"{cert_dir}/fullchain.pem"):
         print_error(f"SSL certificate not found: {cert_dir}/fullchain.pem")
         print("  Run Step 10 first to obtain SSL certificates")
         return False
 
-    print(f"  Domain: {domain}")
+    print(f"  Domain(s): {domain}")
+    print(f"  Primary domain: {primary_domain}")
     print(f"  SSL certificates: {cert_dir}")
 
     print_step(1, 3, "Deploying full nginx configuration")
@@ -1629,8 +1634,25 @@ server {{
         run_command(f"cp {haproxy_config_file} {backup_file}", check=False)
         print(f"  ✓ HAProxy backup: {backup_file}")
 
+    # Generate HAProxy SNI rules for all domains
+    haproxy_rules = []
+    # Primary domain → nginx (decoy site)
+    haproxy_rules.append(f"    use_backend nginx_backend if {{ req_ssl_sni -i {primary_domain} }}")
+
+    # Secondary domains (api., app.) → specific backends
+    if len(domains) > 1:
+        for d in domains[1:]:
+            if d.startswith('api.'):
+                haproxy_rules.append(f"    use_backend xray_grpc if {{ req_ssl_sni -i {d} }}")
+            elif d.startswith('app.'):
+                haproxy_rules.append(f"    use_backend xray_xhttp if {{ req_ssl_sni -i {d} }}")
+            else:
+                haproxy_rules.append(f"    use_backend nginx_backend if {{ req_ssl_sni -i {d} }}")
+
+    haproxy_rules_str = "\n".join(haproxy_rules)
+
     haproxy_config = f"""# HAProxy Configuration for SNI-based routing
-# Domain: {domain}
+# Domains: {', '.join(domains)}
 
 global
     log /dev/log local0
@@ -1664,14 +1686,8 @@ frontend tls_frontend
     tcp-request inspect-delay 5s
     tcp-request content accept if {{ req_ssl_hello_type 1 }}
 
-    # Route {domain} to nginx backend (port 8080) - serves gRPC and XHTTP
-    use_backend nginx_backend if {{ req_ssl_sni -i {domain} }}
-
-    # Route api.{domain} to gRPC backend (port 10000)
-    use_backend xray_grpc if {{ req_ssl_sni -i api.{domain} }}
-
-    # Route app.{domain} to XHTTP backend (port 10001)
-    use_backend xray_xhttp if {{ req_ssl_sni -i app.{domain} }}
+    # Route domains to appropriate backends
+{haproxy_rules_str}
 
     # All other SNI goes to Reality backend (port 8443)
     default_backend xray_reality
