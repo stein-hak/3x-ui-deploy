@@ -1807,11 +1807,19 @@ def step_proxy_deploy_haproxy(domain: str = None, backend_ip: str = None):
 
     print_step(2, 4, "Creating HAProxy configuration")
 
-    # Generate SNI rules for all domains
+    # Generate SNI rules: primary domain → local nginx, other domains → backend
+    # Primary domain (e.g., phone-bliss.tech) shows legitimate website
+    # Secondary domains (e.g., api.phone-bliss.tech) proxy to backend for VPN
     sni_rules = []
-    for d in domains:
-        sni_rules.append(f"    use_backend local_nginx if {{ req_ssl_sni -i {d} }}")
-        sni_rules.append(f"    use_backend local_nginx if {{ req_ssl_sni -i www.{d} }}")
+    sni_rules.append(f"    use_backend local_nginx if {{ req_ssl_sni -i {primary_domain} }}")
+    sni_rules.append(f"    use_backend local_nginx if {{ req_ssl_sni -i www.{primary_domain} }}")
+
+    # Secondary domains go to backend (if any)
+    if len(domains) > 1:
+        for d in domains[1:]:
+            sni_rules.append(f"    use_backend remote_backend if {{ req_ssl_sni -i {d} }}")
+            sni_rules.append(f"    use_backend remote_backend if {{ req_ssl_sni -i www.{d} }}")
+
     sni_rules_str = "\n".join(sni_rules)
 
     haproxy_config = f"""# HAProxy Configuration - Proxy Mode (SNI Routing)
@@ -1999,10 +2007,13 @@ server {{
 
     print(f"\n{Colors.GREEN}Proxy mode deployment complete!{Colors.ENDC}\n")
     print(f"{Colors.BOLD}Configuration:{Colors.ENDC}")
-    print(f"  Proxy domains: {', '.join(domains)}")
-    print(f"  Primary domain: {primary_domain}")
-    print(f"  Backend server: {backend_ip}:443")
-    print(f"  Local decoy: Nginx on 127.0.0.1:8080")
+    print(f"  Primary domain: {primary_domain} → Local nginx decoy (legitimate website)")
+    if len(domains) > 1:
+        print(f"  API domains: {', '.join(domains[1:])} → Backend {backend_ip}:443 (VPN traffic)")
+    print(f"  Other SNI (Reality): vk.com, max.ru, etc. → Backend {backend_ip}:443")
+    print(f"\n{Colors.BOLD}Services:{Colors.ENDC}")
+    print(f"  HAProxy: 0.0.0.0:443 (SNI routing)")
+    print(f"  Nginx decoy: 127.0.0.1:8080")
     print(f"  HAProxy stats: http://127.0.0.1:8404/stats")
 
     return True
