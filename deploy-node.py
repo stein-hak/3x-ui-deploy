@@ -1231,10 +1231,16 @@ def step10_obtain_ssl_cert(domain: str = None):
         print_warning("No domain configured, skipping SSL certificate acquisition")
         return True
 
-    print(f"  Domain: {domain}")
+    # Parse multiple domains (comma-separated) - certbot stores in primary domain dir
+    domains = [d.strip() for d in domain.split(',')]
+    primary_domain = domains[0]
 
-    # Check if certificates already exist
-    cert_dir = f"/etc/letsencrypt/live/{domain}"
+    print(f"  Domain(s): {domain}")
+    if len(domains) > 1:
+        print(f"  Primary domain: {primary_domain} (certificate storage)")
+
+    # Check if certificates already exist (stored under primary domain)
+    cert_dir = f"/etc/letsencrypt/live/{primary_domain}"
     if os.path.exists(f"{cert_dir}/fullchain.pem") and os.path.exists(f"{cert_dir}/privkey.pem"):
         print_success(f"SSL certificates already exist: {cert_dir}")
         print(f"  ✓ {cert_dir}/fullchain.pem")
@@ -1257,7 +1263,12 @@ def step10_obtain_ssl_cert(domain: str = None):
 
     print_step(1, 3, "Checking DNS propagation")
     print(f"\n{Colors.YELLOW}Before obtaining SSL certificates, ensure DNS is configured:{Colors.ENDC}")
-    print(f"  A record for {domain} must point to this server's IP")
+    if len(domains) > 1:
+        print(f"  A records for all domains must point to this server's IP:")
+        for d in domains:
+            print(f"    - {d}")
+    else:
+        print(f"  A record for {primary_domain} must point to this server's IP")
     print()
 
     # Try to detect current IP
@@ -1269,18 +1280,22 @@ def step10_obtain_ssl_cert(domain: str = None):
         server_ip = "UNKNOWN"
         print_warning("  Could not detect server IP")
 
-    # Check DNS resolution
-    code, dns_out, _ = run_command(f"dig +short {domain} @8.8.8.8", check=False)
-    if code == 0 and dns_out.strip():
-        dns_ip = dns_out.strip().split('\n')[0]
-        print(f"  DNS resolves to: {Colors.BOLD}{dns_ip}{Colors.ENDC}")
+    # Check DNS resolution for all domains
+    all_dns_ok = True
+    for d in domains:
+        code, dns_out, _ = run_command(f"dig +short {d} @8.8.8.8", check=False)
+        if code == 0 and dns_out.strip():
+            dns_ip = dns_out.strip().split('\n')[0]
+            print(f"  {d} → {Colors.BOLD}{dns_ip}{Colors.ENDC}")
 
-        if dns_ip == server_ip:
-            print_success("  DNS correctly points to this server")
+            if dns_ip == server_ip:
+                print_success(f"    DNS correctly points to this server")
+            else:
+                print_warning(f"    DNS mismatch! Expected {server_ip}, got {dns_ip}")
+                all_dns_ok = False
         else:
-            print_warning(f"  DNS mismatch! Expected {server_ip}, got {dns_ip}")
-    else:
-        print_warning(f"  Could not resolve {domain}")
+            print_warning(f"  Could not resolve {d}")
+            all_dns_ok = False
 
     print()
     response = input(f"{Colors.CYAN}DNS is configured correctly? [y/N]: {Colors.ENDC}")
@@ -1292,17 +1307,20 @@ def step10_obtain_ssl_cert(domain: str = None):
     print_step(2, 3, "Requesting SSL certificate with certbot")
 
     # Ask for email
-    email = input(f"{Colors.CYAN}Email for Let's Encrypt notifications [{Colors.BOLD}admin@{domain}{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
+    email = input(f"{Colors.CYAN}Email for Let's Encrypt notifications [{Colors.BOLD}admin@{primary_domain}{Colors.ENDC}{Colors.CYAN}]: {Colors.ENDC}").strip()
     if not email:
-        email = f"admin@{domain}"
+        email = f"admin@{primary_domain}"
 
-    print(f"\n  Requesting certificate for: {domain}")
+    # Build certbot command with all domains
+    domain_args = ' '.join([f'-d {d}' for d in domains])
+
+    print(f"\n  Requesting certificate for: {', '.join(domains)}")
     print(f"  Email: {email}")
     print()
 
     # Run certbot
     cmd = f"""certbot certonly --nginx \\
-  -d {domain} \\
+  {domain_args} \\
   --non-interactive --agree-tos \\
   -m {email}"""
 
@@ -1315,8 +1333,8 @@ def step10_obtain_ssl_cert(domain: str = None):
         print_success("SSL certificate obtained successfully")
         print(out)
 
-        # Verify certificate files
-        cert_dir = f"/etc/letsencrypt/live/{domain}"
+        # Verify certificate files (stored under primary domain)
+        cert_dir = f"/etc/letsencrypt/live/{primary_domain}"
         cert_files = ["fullchain.pem", "privkey.pem"]
 
         all_exist = True
@@ -1792,8 +1810,8 @@ def step_proxy_deploy_haproxy(domain: str = None, backend_ip: str = None):
     # Generate SNI rules for all domains
     sni_rules = []
     for d in domains:
-        sni_rules.append(f"    use_backend local_nginx if {{{{ req_ssl_sni -i {d} }}}}")
-        sni_rules.append(f"    use_backend local_nginx if {{{{ req_ssl_sni -i www.{d} }}}}")
+        sni_rules.append(f"    use_backend local_nginx if {{ req_ssl_sni -i {d} }}")
+        sni_rules.append(f"    use_backend local_nginx if {{ req_ssl_sni -i www.{d} }}")
     sni_rules_str = "\n".join(sni_rules)
 
     haproxy_config = f"""# HAProxy Configuration - Proxy Mode (SNI Routing)
@@ -1831,7 +1849,7 @@ frontend tls_frontend
     mode tcp
 
     tcp-request inspect-delay 5s
-    tcp-request content accept if {{{{ req_ssl_hello_type 1 }}}}
+    tcp-request content accept if {{ req_ssl_hello_type 1 }}
 
     # Local decoy for proxy domains (browsers)
 {sni_rules_str}
