@@ -1976,6 +1976,47 @@ server {{
         return 200 '{{"status":"ok","mode":"proxy"}}';
     }}
 }}
+
+# HTTPS on port 8443 - Reality target fallback
+server {{
+    listen 8443 ssl http2 default_server;
+    listen [::]:8443 ssl http2 default_server;
+
+    # No server_name - accepts ANY SNI (for Reality fallback)
+
+    server_tokens off;
+
+    # SSL Configuration
+    ssl_certificate {cert_dir}/fullchain.pem;
+    ssl_certificate_key {cert_dir}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!eNULL:!MD5:!DES:!RC4:!ADH:!SSLv3:!EXP:!PSK:!DSS;
+    ssl_prefer_server_ciphers off;
+
+    # Static site
+    root /var/www/site;
+    index index.html;
+
+    # Logging
+    access_log /var/log/nginx/reality-target-access.log;
+    error_log /var/log/nginx/reality-target-error.log;
+
+    # Security Headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location / {{
+        try_files $uri $uri/ =404;
+    }}
+
+    # Health check
+    location /health {{
+        access_log off;
+        return 200 'OK\\n';
+        add_header Content-Type text/plain;
+    }}
+}}
 """
 
     try:
@@ -2030,6 +2071,10 @@ server {{
     print(f"\n{Colors.BOLD}Services:{Colors.ENDC}")
     print(f"  HAProxy: 0.0.0.0:443 (SNI routing)")
     print(f"  Nginx decoy: 127.0.0.1:8080")
+    print(f"  Reality target: 0.0.0.0:8443 (SSL fallback endpoint)")
+    print(f"\n{Colors.BOLD}Reality Configuration:{Colors.ENDC}")
+    print(f"  Use 'target': '{primary_domain}:8443' in Reality settings")
+    print(f"  Accepts any SNI, returns valid SSL certificate")
     print(f"  HAProxy stats: http://127.0.0.1:8404/stats")
 
     return True
