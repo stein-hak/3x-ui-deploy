@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  3x-ui-32:
+    image: steinhak/3x-ui:v3.2.7
+    container_name: 3x-ui-32
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:2054:2053"       # Admin panel
+      - "127.0.0.1:11000:10000"     # gRPC legacy
+      - "127.0.0.1:11001:10001"     # XHTTP legacy
+      - "127.0.0.1:9443:8443"       # Reality
+      - "127.0.0.1:21000:20000"     # gRPC new
+      - "127.0.0.1:21001:20001"     # XHTTP new
+
+    environment:
+      - X_UI_PORT=2053
+      - X_UI_USERNAME=admin
+      - X_UI_PASSWORD=admin
+      - X_UI_PANEL_PATH=/admin
+      - TZ=UTC
+
+    volumes:
+      - /opt/3x-ui-32:/etc/x-ui
+      - /dev/shm:/dev/shm:rw
+
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:2053 | grep -q 'Welcome' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+    labels:
+      - "com.3x-ui.version=3.2.7"

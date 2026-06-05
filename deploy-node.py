@@ -353,21 +353,40 @@ def step4_setup_3xui(domain=None):
     # Use default configuration (no user prompts)
     print_step(1, 5, "Using default configuration")
 
-    deploy_dir = "/opt/3x-ui"
+    # Decide version and directory based on existing installation
+    if os.path.exists("/opt/3x-ui"):
+        print_warning("Found existing 3x-ui installation at /opt/3x-ui")
+        response = input(f"{Colors.YELLOW}Deploy 3x-ui v3.2.7 in parallel at /opt/3x-ui-32? [y/N]: {Colors.ENDC}").strip().lower()
+        if response in ['y', 'yes']:
+            deploy_dir = "/opt/3x-ui-32"
+            container_name = "3x-ui-32"
+            admin_port = "2054"
+            print_success("Will deploy v3.2.7 at /opt/3x-ui-32")
+        else:
+            print("Skipping deployment")
+            return False
+    else:
+        deploy_dir = "/opt/3x-ui"
+        container_name = "3x-ui"
+        admin_port = "2053"
+        print_success("Will deploy v3.2.7 at /opt/3x-ui (fresh installation)")
+
     admin_user = "admin"
     admin_pass = "admin"
     panel_path = "/admin"
 
     print(f"\n  Deployment dir: {deploy_dir}")
+    print(f"  Container name: {container_name}")
+    print(f"  Admin port: {admin_port}")
     print(f"  Admin username: {admin_user}")
     print(f"  Admin password: {'*' * len(admin_pass)}")
     print(f"  Panel path: {panel_path}")
 
     # Check if container already running
     print_step(2, 5, "Checking for existing container")
-    code, out, _ = run_command("docker ps --filter name=3x-ui --format '{{.Names}}'", check=False)
-    if code == 0 and "3x-ui" in out:
-        print_success("3x-ui container already running, skipping deployment")
+    code, out, _ = run_command(f"docker ps --filter name={container_name} --format '{{{{.Names}}}}'", check=False)
+    if code == 0 and container_name in out:
+        print_success(f"{container_name} container already running, skipping deployment")
         # Return existing config
         return {
             "deploy_dir": deploy_dir,
@@ -394,13 +413,13 @@ def step4_setup_3xui(domain=None):
     docker_compose_template = f'''version: '3.8'
 
 services:
-  3x-ui:
-    image: steinhak/3x-ui:latest
-    container_name: 3x-ui
+  {container_name}:
+    image: steinhak/3x-ui:v3.2.7
+    container_name: {container_name}
     restart: unless-stopped
 
     ports:
-      - "127.0.0.1:2053:2053"     # Admin panel (localhost only)
+      - "127.0.0.1:{admin_port}:2053"     # Admin panel (localhost only)
       - "127.0.0.1:10000:10000"   # gRPC endpoint for VLESS (for HAProxy routing)
       - "127.0.0.1:10001:10001"   # XHTTP endpoint for VLESS (for HAProxy routing)
       - "127.0.0.1:8443:8443"     # Reality backend (for HAProxy routing)
@@ -429,7 +448,7 @@ services:
 
     labels:
       - "com.3x-ui.description=3x-ui Web Panel"
-      - "com.3x-ui.version=latest"
+      - "com.3x-ui.version=3.2.7"
 '''
 
     compose_file = f"{deploy_dir}/docker-compose.yml"
