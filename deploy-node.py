@@ -440,11 +440,11 @@ services:
       - NET_ADMIN
 
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:2053 | grep -q 'Welcome' || exit 1"]
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:2053/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 5s
+      start_period: 40s
 
     labels:
       - "com.3x-ui.description=3x-ui Web Panel"
