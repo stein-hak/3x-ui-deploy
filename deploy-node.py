@@ -373,7 +373,7 @@ def step4_setup_3xui(domain=None):
 
     admin_user = "admin"
     admin_pass = "admin"
-    panel_path = "/admin"
+    panel_path = "/"
 
     print(f"\n  Deployment dir: {deploy_dir}")
     print(f"  Container name: {container_name}")
